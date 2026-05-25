@@ -16,6 +16,6 @@ FAILURE: Build failed with an exception.
 > Run with --scan to get full insights.
 > Get more help at https://help.gradle.org.
 
-BUILD FAILED in 1s
-Running Gradle task 'assembleRelease'...                         1,746ms
+BUILD FAILED in 2s
+Running Gradle task 'assembleRelease'...                         2,965ms
 Gradle task assembleRelease failed with exit code 1
