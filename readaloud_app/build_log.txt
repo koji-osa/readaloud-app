@@ -1,29 +1,47 @@
 Running Gradle task 'assembleRelease'...                        
+Warning: Flutter support for your project's Gradle version (8.9.0) will soon be dropped. Please upgrade your Gradle version to a version of at least 8.14.0 soon.
+Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
+
+Potential fix: Your project's gradle version is typically defined in the gradle wrapper file. By default, this can be found at /workspaces/readaloud-app/readaloud_app/android/gradle/wrapper/gradle-wrapper.properties. 
+For more information, see https://docs.gradle.org/current/userguide/gradle_wrapper.html.
+
+Warning: Flutter support for your project's Android Gradle Plugin version (Android Gradle Plugin version 8.7.0) will soon be dropped. Please upgrade your Android Gradle Plugin version to a version of at least Android Gradle Plugin version 8.11.1 soon.
+Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
+
+Potential fix: Your project's AGP version is typically defined in the plugins block of the `settings.gradle` file (/workspaces/readaloud-app/readaloud_app/android/settings.gradle), by a plugin with the id of com.android.application. 
+If you don't see a plugins block, your project was likely created with an older template version. In this case it is most likely defined in the top-level build.gradle file (/workspaces/readaloud-app/readaloud_app/android/build.gradle) by the following line in the dependencies block of the buildscript: "classpath 'com.android.tools.build:gradle:<version>'".
+
+Warning: Flutter support for your project's Kotlin version (2.0.0) will soon be dropped. Please upgrade your Kotlin version to a version of at least 2.2.20 soon.
+Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
+
+Potential fix: Your project's KGP version is typically defined in the plugins block of the `settings.gradle` file (/workspaces/readaloud-app/readaloud_app/android/settings.gradle), by a plugin with the id of org.jetbrains.kotlin.android. 
+If you don't see a plugins block, your project was likely created with an older template version, in which case it is most likely defined in the top-level build.gradle file (/workspaces/readaloud-app/readaloud_app/android/build.gradle) by the ext.kotlin_version property.
+
 The message received from the daemon indicates that the daemon has disappeared.
-Build request sent: Build{id=12662ee8-3078-4db1-9515-c6e1bf440c9f, currentDir=/workspaces/readaloud-app/readaloud_app/android}
+Build request sent: Build{id=98910b5e-11ac-4093-a64c-68b169327be3, currentDir=/workspaces/readaloud-app/readaloud_app/android}
 Attempting to read last messages from the daemon log...
-Daemon pid: 73987
-  log file: /home/codespace/.gradle/daemon/8.9/daemon-73987.out.log
------ Last  20 lines from daemon log file - daemon-73987.out.log -----
-2026-05-25T10:05:58.503+0000 [DEBUG] [org.gradle.launcher.daemon.server.DefaultDaemonConnection] thread 26: Received non-IO message from client: Build{id=12662ee8-3078-4db1-9515-c6e1bf440c9f, currentDir=/workspaces/readaloud-app/readaloud_app/android}
-2026-05-25T10:05:58.503+0000 [INFO] [org.gradle.launcher.daemon.server.DefaultIncomingConnectionHandler] Received command: Build{id=12662ee8-3078-4db1-9515-c6e1bf440c9f, currentDir=/workspaces/readaloud-app/readaloud_app/android}.
-2026-05-25T10:05:58.504+0000 [DEBUG] [org.gradle.launcher.daemon.server.DefaultIncomingConnectionHandler] Starting executing command: Build{id=12662ee8-3078-4db1-9515-c6e1bf440c9f, currentDir=/workspaces/readaloud-app/readaloud_app/android} with connection: socket connection from /127.0.0.1:45511 to /127.0.0.1:41696.
-2026-05-25T10:05:58.514+0000 [DEBUG] [org.gradle.launcher.daemon.server.DaemonStateCoordinator] Command execution: started DaemonCommandExecution[command = Build{id=12662ee8-3078-4db1-9515-c6e1bf440c9f, currentDir=/workspaces/readaloud-app/readaloud_app/android}, connection = DefaultDaemonConnection: socket connection from /127.0.0.1:45511 to /127.0.0.1:41696] after 0.012166666666666666 minutes of idle
-2026-05-25T10:05:58.514+0000 [INFO] [org.gradle.launcher.daemon.server.DaemonRegistryUpdater] Marking the daemon as busy, address: [714ef127-2483-4fc7-b375-bb1781bd52cd port:45511, addresses:[localhost/127.0.0.1]]
-2026-05-25T10:05:58.515+0000 [DEBUG] [org.gradle.launcher.daemon.registry.PersistentDaemonRegistry] Marking busy by address: [714ef127-2483-4fc7-b375-bb1781bd52cd port:45511, addresses:[localhost/127.0.0.1]]
-2026-05-25T10:05:58.515+0000 [DEBUG] [org.gradle.cache.internal.DefaultFileLockManager] Waiting to acquire exclusive lock on daemon addresses registry.
-2026-05-25T10:05:58.516+0000 [DEBUG] [org.gradle.cache.internal.DefaultFileLockManager] Lock acquired on daemon addresses registry.
-2026-05-25T10:05:58.521+0000 [DEBUG] [org.gradle.cache.internal.DefaultFileLockManager] Releasing lock on daemon addresses registry.
-2026-05-25T10:05:58.522+0000 [DEBUG] [org.gradle.launcher.daemon.server.DaemonStateCoordinator] resetting idle timer
-2026-05-25T10:05:58.525+0000 [DEBUG] [org.gradle.launcher.daemon.server.DaemonStateCoordinator] daemon is running. Sleeping until state changes.
-2026-05-25T10:05:58.526+0000 [INFO] [org.gradle.launcher.daemon.server.exec.StartBuildOrRespondWithBusy] Daemon is about to start building Build{id=12662ee8-3078-4db1-9515-c6e1bf440c9f, currentDir=/workspaces/readaloud-app/readaloud_app/android}. Dispatching build started information...
-2026-05-25T10:05:58.526+0000 [DEBUG] [org.gradle.launcher.daemon.server.SynchronizedDispatchConnection] thread 28: dispatching org.gradle.launcher.daemon.protocol.BuildStarted@1788c4fd
-2026-05-25T10:05:58.528+0000 [DEBUG] [org.gradle.launcher.daemon.server.exec.EstablishBuildEnvironment] Configuring env variables: [IRBRC, PATH, CODESPACES, CODESPACE_VSCODE_FOLDER, PROMPT_DIRTRIM, VSCODE_PYTHON_AUTOACTIVATE_GUARD, ANDROID_HOME, GITHUB_API_URL, COLORTERM, DOCKER_BUILDKIT, SDKMAN_DIR, rvm_version, VSCODE_GIT_ASKPASS_NODE, TERM_PROGRAM_VERSION, PWD, NVS_DIR, CONDA_SCRIPT, SDKMAN_BROKER_API, HUGO_ROOT, NVM_CD_FLAGS, LESSOPEN, RVM_PATH, SDKMAN_CANDIDATES_API, MY_RUBY_HOME, GITHUB_CODESPACE_TOKEN, ContainerVersion, RAILS_DEVELOPMENT_HOSTS, rvm_path, GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN, NVM_SYMLINK_CURRENT, PYTHON_ROOT, GITHUB_USER, SHLVL, DOTNET_RUNNING_IN_CONTAINER, JAVA_ROOT, GITHUB_SERVER_URL, JAVA_HOME, GIT_EDITOR, TERM, FEATURE_SPARK_POST_COMMIT_CREATE_ITERATION, GRADLE_HOME, NVM_INC, GITHUB_REPOSITORY, VSCODE_IPC_HOOK_CLI, NUGET_XMLDOC_MODE, RUBY_HOME, NODE_ROOT, ENABLE_DYNAMIC_INSTALL, TERM_PROGRAM, DOTNET_SKIP_FIRST_TIME_EXPERIENCE, PHP_ROOT, RUBY_ROOT, GOROOT, JUPYTERLAB_PATH, GEM_PATH, FLUTTER_ALREADY_LOCKED, NVM_BIN, NVS_USE_XZ, DOTNET_USE_POLLING_FILE_WATCHER, VSCODE_GIT_IPC_HANDLE, PIPX_HOME, HUGO_DIR, MAVEN_HOME, MAVEN_ROOT, ORYX_PREFER_USER_INSTALLED_SDKS, GIT_ASKPASS, SHELL, GITHUB_TOKEN, GITHUB_GRAPHQL_URL, DEBIAN_FLAVOR, GOPATH, OLDPWD, GEM_HOME, PHP_PATH, DOTNET_ROOT, RUBY_VERSION, DEBUGINFOD_URLS, LS_COLORS, ORYX_ENV_TYPE, PIPX_BIN_DIR, BROWSER, LESSCLOSE, rvm_bin_path, CLOUDENV_ENVIRONMENT_ID, ORYX_SDK_STORAGE_BASE_URL, FLUTTER_ROOT, rvm_prefix, LANG, VSCODE_GIT_ASKPASS_MAIN, INTERNAL_VSCS_TARGET_URL, CONDA_DIR, VSCODE_GIT_ASKPASS_EXTRA_ARGS, SDKMAN_CANDIDATES_DIR, NVS_HOME, NVS_ROOT, NVM_DIR, NVS_OS, SHELL_LOGGED_IN, PYTHON_PATH, PYTHONIOENCODING, SDKMAN_PLATFORM, USER, ORYX_DIR, HOSTNAME, CODESPACE_NAME, NPM_GLOBAL, HOME, DYNAMIC_INSTALL_ROOT_DIR]
-2026-05-25T10:05:58.548+0000 [DEBUG] [org.gradle.launcher.daemon.server.exec.LogToClient] About to start relaying all logs to the client via the connection.
-2026-05-25T10:05:58.548+0000 [INFO] [org.gradle.launcher.daemon.server.exec.LogToClient] The client will now receive all logging from the daemon (pid: 73987). The daemon log file: /home/codespace/.gradle/daemon/8.9/daemon-73987.out.log
-2026-05-25T10:05:58.557+0000 [INFO] [org.gradle.launcher.daemon.server.exec.LogAndCheckHealth] Starting build in new daemon [memory: 8 GiB]
-2026-05-25T10:05:58.568+0000 [DEBUG] [org.gradle.launcher.daemon.server.exec.ExecuteBuild] The daemon has started executing the build.
-2026-05-25T10:05:58.569+0000 [DEBUG] [org.gradle.launcher.daemon.server.exec.ExecuteBuild] Executing build with daemon context: DefaultDaemonContext[uid=f213deff-0e49-4966-8bbc-1b6b622dcda8,javaHome=/usr/local/sdkman/candidates/java/21.0.10-ms,javaVersion=21,daemonRegistryDir=/home/codespace/.gradle/daemon,pid=73987,idleTimeout=10800000,priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,daemonOpts=-XX:MaxMetaspaceSize=4G,-XX:ReservedCodeCacheSize=512m,-XX:+HeapDumpOnOutOfMemoryError,--add-opens=java.base/java.util=ALL-UNNAMED,--add-opens=java.base/java.lang=ALL-UNNAMED,--add-opens=java.base/java.lang.invoke=ALL-UNNAMED,--add-opens=java.prefs/java.util.prefs=ALL-UNNAMED,--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED,--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED,--add-opens=java.base/java.nio.charset=ALL-UNNAMED,--add-opens=java.base/java.net=ALL-UNNAMED,--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED,-Xmx8G,-Dfile.encoding=UTF-8,-Duser.country,-Duser.language=en,-Duser.variant]
+Daemon pid: 80342
+  log file: /home/codespace/.gradle/daemon/8.9/daemon-80342.out.log
+----- Last  20 lines from daemon log file - daemon-80342.out.log -----
+2026-05-25T10:11:15.378+0000 [DEBUG] [org.gradle.launcher.daemon.server.exec.ExecuteBuild] Executing build with daemon context: DefaultDaemonContext[uid=d48cc3ce-8981-4714-8fc5-dd4255ad7500,javaHome=/usr/local/sdkman/candidates/java/21.0.10-ms,javaVersion=21,daemonRegistryDir=/home/codespace/.gradle/daemon,pid=80342,idleTimeout=120000,priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,daemonOpts=-XX:MaxMetaspaceSize=512m,--add-opens=java.base/java.util=ALL-UNNAMED,--add-opens=java.base/java.lang=ALL-UNNAMED,--add-opens=java.base/java.lang.invoke=ALL-UNNAMED,--add-opens=java.prefs/java.util.prefs=ALL-UNNAMED,--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED,--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED,--add-opens=java.base/java.nio.charset=ALL-UNNAMED,--add-opens=java.base/java.net=ALL-UNNAMED,--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED,-Xmx2g,-Dfile.encoding=UTF-8,-Duser.country,-Duser.language=en,-Duser.variant]
+Warning: Flutter support for your project's Gradle version (8.9.0) will soon be dropped. Please upgrade your Gradle version to a version of at least 8.14.0 soon.
+Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
+
+Potential fix: Your project's gradle version is typically defined in the gradle wrapper file. By default, this can be found at /workspaces/readaloud-app/readaloud_app/android/gradle/wrapper/gradle-wrapper.properties. 
+For more information, see https://docs.gradle.org/current/userguide/gradle_wrapper.html.
+
+Warning: Flutter support for your project's Android Gradle Plugin version (Android Gradle Plugin version 8.7.0) will soon be dropped. Please upgrade your Android Gradle Plugin version to a version of at least Android Gradle Plugin version 8.11.1 soon.
+Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
+
+Potential fix: Your project's AGP version is typically defined in the plugins block of the `settings.gradle` file (/workspaces/readaloud-app/readaloud_app/android/settings.gradle), by a plugin with the id of com.android.application. 
+If you don't see a plugins block, your project was likely created with an older template version. In this case it is most likely defined in the top-level build.gradle file (/workspaces/readaloud-app/readaloud_app/android/build.gradle) by the following line in the dependencies block of the buildscript: "classpath 'com.android.tools.build:gradle:<version>'".
+
+Warning: Flutter support for your project's Kotlin version (2.0.0) will soon be dropped. Please upgrade your Kotlin version to a version of at least 2.2.20 soon.
+Alternatively, use the flag "--android-skip-build-dependency-validation" to bypass this check.
+
+Potential fix: Your project's KGP version is typically defined in the plugins block of the `settings.gradle` file (/workspaces/readaloud-app/readaloud_app/android/settings.gradle), by a plugin with the id of org.jetbrains.kotlin.android. 
+If you don't see a plugins block, your project was likely created with an older template version, in which case it is most likely defined in the top-level build.gradle file (/workspaces/readaloud-app/readaloud_app/android/build.gradle) by the ext.kotlin_version property.
+
 Daemon vm is shutting down... The daemon has exited normally or was terminated in response to a user interrupt.----- End of the daemon log -----
 
 
@@ -37,5 +55,5 @@ Gradle build daemon disappeared unexpectedly (it may have been killed or may hav
 > Run with --info or --debug option to get more log output.
 > Run with --scan to get full insights.
 > Get more help at https://help.gradle.org.
-Running Gradle task 'assembleRelease'...                          123.3s
+Running Gradle task 'assembleRelease'...                          324.5s
 Gradle task assembleRelease failed with exit code 1
