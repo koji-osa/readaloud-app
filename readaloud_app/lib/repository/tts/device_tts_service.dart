@@ -199,6 +199,8 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     String? voiceId,
   }) async {
     await _initFuture;
+    // メディアセッションをアクティブ化（Bluetooth・通知ボタン対応）
+    await AudioService.androidForceEnableMediaButtons();
 
     // 再生パラメータを保持（停止後の再開用）
     _lastText = text;
@@ -253,6 +255,8 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   @override
   Future<void> play() async {
     await _initFuture;
+    // メディアセッションをアクティブ化（Bluetooth・通知ボタン対応）
+    await AudioService.androidForceEnableMediaButtons();
     if (_isPaused && !_isStopped && _chunks.isNotEmpty) {
       // 一時停止からの再開
       _isPaused = false;
