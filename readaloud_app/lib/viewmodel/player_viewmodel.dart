@@ -4,6 +4,8 @@ import '../model/content.dart';
 import '../model/playback_state.dart';
 import '../model/bookmark.dart';
 import '../repository/playback_repository.dart';
+import '../repository/settings_repository.dart';
+import '../model/setting.dart';
 import '../repository/tts/tts_service.dart';
 import '../usecase/playback/start_playback_usecase.dart';
 import '../usecase/playback/stop_playback_usecase.dart';
@@ -71,6 +73,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final CheckTtsLimitUseCase _checkTtsLimit;
   final TtsService _ttsService;
   final PlaybackRepository _playbackRepo;
+  final SettingsRepository _settingsRepo;
 
   StreamSubscription<int>? _positionSubscription;
   StreamSubscription<TtsStatus>? _statusSubscription;
@@ -85,6 +88,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required CheckTtsLimitUseCase checkTtsLimit,
     required TtsService ttsService,
     required PlaybackRepository playbackRepo,
+    required SettingsRepository settingsRepo,
   })  : _startPlayback = startPlayback,
         _stopPlayback = stopPlayback,
         _savePlaybackState = savePlaybackState,
@@ -94,6 +98,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _checkTtsLimit = checkTtsLimit,
         _ttsService = ttsService,
         _playbackRepo = playbackRepo,
+        _settingsRepo = settingsRepo,
         super(PlayerState()) {
     _listenToStreams();
   }
@@ -124,9 +129,19 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   Future<void> setContent(Content content) async {
     state = state.copyWith(content: content, isLoading: true);
     try {
-      final playbackState =
-          await _playbackRepo.getByContentId(content.id) ??
-              PlaybackState(contentId: content.id);
+      final existingState = await _playbackRepo.getByContentId(content.id);
+      final PlaybackState playbackState;
+      if (existingState != null) {
+        playbackState = existingState;
+      } else {
+        // 初回: 設定画面のデフォルト速度を適用
+        final defaultSpeedStr = await _settingsRepo.get(SettingKeys.defaultSpeed) ?? '1.0';
+        final defaultSpeed = double.tryParse(defaultSpeedStr) ?? 1.0;
+        playbackState = PlaybackState(
+          contentId: content.id,
+          speed: defaultSpeed,
+        );
+      }
       state = state.copyWith(
         content: content,
         playbackState: playbackState,

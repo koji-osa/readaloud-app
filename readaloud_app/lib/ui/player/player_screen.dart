@@ -46,6 +46,7 @@ final playerViewModelProvider =
   );
 
   return PlayerViewModel(
+    settingsRepo: settingsRepo,
     startPlayback: StartPlaybackUseCase(
       contentRepo: contentRepo,
       playbackRepo: playbackRepo,

@@ -18,6 +18,33 @@ class _HighlightTextState extends State<HighlightText> {
   final ScrollController _scrollController = ScrollController();
 
   @override
+  void didUpdateWidget(HighlightText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.highlightPosition != widget.highlightPosition) {
+      _scrollToHighlight();
+    }
+  }
+
+  void _scrollToHighlight() {
+    if (!_scrollController.hasClients) return;
+    if (widget.text.isEmpty) return;
+
+    final ratio = widget.highlightPosition / widget.text.length;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final targetScroll = (maxScroll * ratio).clamp(0.0, maxScroll);
+
+    // 現在のスクロール位置から大きくずれている場合のみスクロール
+    final currentScroll = _scrollController.offset;
+    if ((targetScroll - currentScroll).abs() > 100) {
+      _scrollController.animateTo(
+        targetScroll,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
@@ -48,14 +75,12 @@ class _HighlightTextState extends State<HighlightText> {
 
     final pos = widget.highlightPosition.clamp(0, widget.text.length);
 
-    // ハイライト前
     const beforeStyle = TextStyle(
       color: Color(0xFF8888AA),
       fontSize: 14,
       height: 2.0,
     );
 
-    // ハイライト中（現在読んでいる箇所）
     const highlightStyle = TextStyle(
       color: Color(0xFFF0F0F8),
       fontSize: 14,
@@ -70,7 +95,6 @@ class _HighlightTextState extends State<HighlightText> {
       ];
     }
 
-    // 現在位置から前後の文を特定
     final highlightEnd = _findSentenceEnd(widget.text, pos);
 
     return [
@@ -90,7 +114,6 @@ class _HighlightTextState extends State<HighlightText> {
   }
 
   int _findSentenceEnd(String text, int start) {
-    // 句読点・改行で文の終わりを探す
     final endChars = ['。', '！', '？', '\n', '.', '!', '?'];
     for (int i = start; i < text.length; i++) {
       if (endChars.contains(text[i])) {

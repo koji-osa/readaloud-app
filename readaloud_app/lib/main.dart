@@ -21,10 +21,12 @@ void main() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.example.readaloud_app.audio',
       androidNotificationChannelName: 'ReadAloud',
-      androidNotificationOngoing: true,
+      androidNotificationOngoing: false,
       androidStopForegroundOnPause: true,
     ),
   );
+
+  await AudioService.androidForceEnableMediaButtons();
 
   runApp(
     ProviderScope(
@@ -90,7 +92,6 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
       },
     );
     _shareIntentHandler.startListening();
-    _checkInitialShareIntent();
   }
 
   Future<void> _checkInitialShareIntent() async {
@@ -117,6 +118,8 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
       _onboardingCompleted = completed == 'true';
       _isLoading = false;
     });
+    // オンボーディング確認後にShare Intentを確認
+    await _checkInitialShareIntent();
   }
 
   @override

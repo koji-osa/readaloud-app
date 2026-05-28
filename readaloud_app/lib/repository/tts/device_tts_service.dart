@@ -29,6 +29,8 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   double _lastPitch = 1.0;
   double _lastVolume = 1.0;
   String? _lastVoiceId;
+  Timer? _positionTimer;
+  DateTime? _chunkStartTime;
 
   TtsAudioHandler() {
     _initFuture = _init();
@@ -85,7 +87,29 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     final chunk = _chunks[index];
     _currentPosition = chunk.startPosition;
     _positionController.add(_currentPosition);
+
+    // タイマーで推定位置を定期更新（500ms間隔）
+    _positionTimer?.cancel();
+    _chunkStartTime = DateTime.now();
+    _positionTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      if (_isStopped || _isPaused) {
+        timer.cancel();
+        return;
+      }
+      final elapsed = DateTime.now().difference(_chunkStartTime!).inMilliseconds;
+      final charsPerMs = (5.0 * _lastSpeed) / 1000.0;
+      final estimatedOffset = (elapsed * charsPerMs).round();
+      final nextChunkStart = (index + 1 < _chunks.length)
+          ? _chunks[index + 1].startPosition
+          : (_chunks.last.startPosition + _chunks.last.text.length);
+      final estimatedPosition = (chunk.startPosition + estimatedOffset)
+          .clamp(chunk.startPosition, nextChunkStart - 1);
+      _currentPosition = estimatedPosition;
+      _positionController.add(_currentPosition);
+    });
+
     await _tts.speak(chunk.text);
+    _positionTimer?.cancel();
   }
 
   List<_TextChunk> _splitText(String text, int startPosition) {
@@ -227,6 +251,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   @override
   Future<void> pause() async {
     await _initFuture;
+    _positionTimer?.cancel();
     _isPaused = true;
     await _tts.pause();
     _statusController.add(TtsStatus.paused);
@@ -241,6 +266,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     await _initFuture;
     // 停止時の位置を保持
     _lastStoppedPosition = _currentPosition;
+    _positionTimer?.cancel();
     _isStopped = true;
     _chunks = [];
     await _tts.stop();

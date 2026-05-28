@@ -19,15 +19,23 @@ class SettingsScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(16),
           children: [
             // ヘッダー
-            const Padding(
-              padding: EdgeInsets.only(bottom: 16),
-              child: Text(
-                '設定',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFFF0F0F8),
-                ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Color(0xFF8888AA)),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                  const Text(
+                    '設定',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFFF0F0F8),
+                    ),
+                  ),
+                ],
               ),
             ),
 
@@ -175,7 +183,7 @@ class SettingsScreen extends ConsumerWidget {
     SettingsViewModel vm,
     SettingsState state,
   ) async {
-    final speeds = ['0.5', '0.75', '1.0', '1.25', '1.5', '2.0', '2.5', '3.0'];
+    final speeds = ['0.75', '1.0', '1.5', '2.0', '2.5'];
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
