@@ -1,7 +1,7 @@
 name: readaloud_app
 description: テキスト読み上げアプリ
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.2+2
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -26,11 +26,15 @@ dependencies:
   flutter_sharing_intent: ^2.0.2
   # UUID生成
   uuid: ^4.4.0
-  # プッシュ通知
-  flutter_local_notifications: ^17.2.2
   # ネットワーク確認
   connectivity_plus: ^6.0.3
   # PDF変換
+  # バックグラウンド再生
+  audio_service: ^0.18.17
+  # 音声フォーカス管理（電話着信時の自動停止）
+  audio_session: ^0.1.21
+  # バックグラウンド再生
+  # 音声フォーカス管理（電話着信時の自動停止）
   syncfusion_flutter_pdf: ^26.2.14
 
 dev_dependencies:

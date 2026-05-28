@@ -1,3 +1,4 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/onboarding/onboarding_screen.dart';
@@ -5,19 +6,32 @@ import 'ui/home/home_screen.dart';
 import 'ui/add/add_screen.dart';
 import 'repository/settings_repository.dart';
 import 'repository/impl/settings_repository_impl.dart';
+import 'repository/tts/device_tts_service.dart';
+import 'providers.dart';
 import 'model/setting.dart';
-import 'util/notification_helper.dart';
 import 'util/share_intent_handler.dart';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 通知の初期化
-  await NotificationHelper.initialize();
+  // audio_service初期化（TtsAudioHandlerのシングルトンを生成）
+  final audioHandler = await AudioService.init(
+    builder: () => TtsAudioHandler(),
+    config: const AudioServiceConfig(
+      androidNotificationChannelId: 'com.example.readaloud_app.audio',
+      androidNotificationChannelName: 'ReadAloud',
+      androidNotificationOngoing: true,
+      androidStopForegroundOnPause: true,
+    ),
+  );
 
   runApp(
-    const ProviderScope(
-      child: ReadAloudApp(),
+    ProviderScope(
+      overrides: [
+        audioHandlerProvider.overrideWithValue(audioHandler),
+      ],
+      child: const ReadAloudApp(),
     ),
   );
 }

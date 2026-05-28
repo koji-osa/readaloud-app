@@ -1,7 +1,7 @@
+import '../../providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../model/content.dart';
-import '../../model/bookmark.dart';
 import '../../viewmodel/player_viewmodel.dart';
 import '../../usecase/playback/start_playback_usecase.dart';
 import '../../usecase/playback/stop_playback_usecase.dart';
@@ -16,7 +16,7 @@ import '../../repository/impl/playback_repository_impl.dart';
 import '../../repository/impl/bookmark_repository_impl.dart';
 import '../../repository/impl/settings_repository_impl.dart';
 import '../../repository/tts/device_tts_service.dart';
-import '../../util/notification_helper.dart';
+
 import 'widgets/highlight_text.dart';
 import 'widgets/seek_bar.dart';
 import 'widgets/playback_controls.dart';
@@ -24,17 +24,16 @@ import 'widgets/bookmark_panel.dart';
 
 final playerViewModelProvider =
     StateNotifierProvider.autoDispose<PlayerViewModel, PlayerState>((ref) {
-  final contentRepo   = ContentRepositoryImpl();
-  final playbackRepo  = PlaybackRepositoryImpl();
-  final bookmarkRepo  = BookmarkRepositoryImpl();
-  final settingsRepo  = SettingsRepositoryImpl();
-  final ttsService    = DeviceTtsService();
+  final contentRepo  = ContentRepositoryImpl();
+  final playbackRepo = PlaybackRepositoryImpl();
+  final bookmarkRepo = BookmarkRepositoryImpl();
+  final settingsRepo = SettingsRepositoryImpl();
+  final ttsService   = ref.read(audioHandlerProvider);
 
   final checkTtsLimit = CheckTtsLimitUseCase(
     settingsRepo: settingsRepo,
     onLimitStatus: (status) {
-      // 閾値到達時にプッシュ通知を送信
-      NotificationHelper.notifyTtsLimit(status);
+      // 通知不要（バナーで表示）
     },
   );
   final countTtsUsage = CountTtsUsageUseCase(
@@ -65,6 +64,7 @@ final playerViewModelProvider =
     deleteBookmark: DeleteBookmarkUseCase(bookmarkRepo),
     checkTtsLimit: checkTtsLimit,
     ttsService: ttsService,
+    playbackRepo: playbackRepo,
   );
 });
 
@@ -78,13 +78,37 @@ class PlayerScreen extends ConsumerStatefulWidget {
 }
 
 class _PlayerScreenState extends ConsumerState<PlayerScreen> {
+  List<String> _availableVoices = [];
+
   @override
   void initState() {
     super.initState();
-    // 画面表示後にコンテンツをViewModelにセット
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(playerViewModelProvider.notifier).setContent(widget.content);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final vm = ref.read(playerViewModelProvider.notifier);
+        await vm.setContent(widget.content);
+        await _loadAvailableVoices();
+      } catch (e) {
+        // ViewModelのerrorMessageで表示されるため基本的には不要
+      }
     });
+  }
+
+  Future<void> _loadAvailableVoices() async {
+    final ttsService = ref.read(audioHandlerProvider);
+    try {
+      final voices = await ttsService.getAvailableVoices();
+      final jaVoices = voices
+          .where((v) => v.languageCode.startsWith('ja'))
+          .map((v) => v.id)
+          .toList();
+      if (mounted) {
+        setState(() {
+          _availableVoices = jaVoices;
+        });
+      }
+    } catch (_) {
+    }
   }
 
   @override
@@ -124,6 +148,35 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ],
               ),
             ),
+            // ローディング表示
+            if (state.isLoading)
+              const LinearProgressIndicator(
+                color: Color(0xFF7C5CBF),
+                backgroundColor: Color(0xFF2A2A3E),
+              ),
+            // エラーメッセージ表示
+            if (state.errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        state.errorMessage!,
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close,
+                          color: Colors.redAccent, size: 16),
+                      onPressed: vm.clearError,
+                    ),
+                  ],
+                ),
+              ),
             // テキスト表示（ハイライト付き）
             Expanded(
               child: Padding(
@@ -139,6 +192,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: SeekBar(
                 progress: state.playbackState?.progressPct ?? 0.0,
+                totalChars: widget.content.body.length,
+                speed: state.playbackState?.speed ?? 1.0,
                 onChanged: (value) async {
                   await vm.pause();
                   await vm.seekTo(value);
@@ -161,9 +216,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 isPlaying: state.isPlaying,
                 speed: state.playbackState?.speed ?? 1.0,
                 voiceId: state.playbackState?.voiceId,
+                availableVoices: _availableVoices,
                 onPlay: vm.play,
                 onPause: vm.pause,
                 onStop: vm.stop,
+                onSeekToStart: vm.seekToStart,
+                onSeekToEnd: vm.seekToEnd,
+                onRewind: vm.rewind,
+                onFastForward: vm.fastForward,
                 onSpeedChange: vm.changeSpeed,
                 onVoiceChange: vm.changeVoice,
               ),

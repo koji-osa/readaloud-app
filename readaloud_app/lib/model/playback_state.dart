@@ -83,8 +83,8 @@ class PlaybackState {
         voiceId: voiceId ?? this.voiceId,
         pitch: pitch ?? this.pitch,
         volume: volume ?? this.volume,
-        repeatStart: repeatStart,
-        repeatEnd: repeatEnd,
+        repeatStart: repeatStart ?? this.repeatStart,
+        repeatEnd: repeatEnd ?? this.repeatEnd,
         lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       );

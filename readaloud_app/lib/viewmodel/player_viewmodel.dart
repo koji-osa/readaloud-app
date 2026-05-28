@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../model/content.dart';
 import '../model/playback_state.dart';
 import '../model/bookmark.dart';
+import '../repository/playback_repository.dart';
 import '../repository/tts/tts_service.dart';
 import '../usecase/playback/start_playback_usecase.dart';
 import '../usecase/playback/stop_playback_usecase.dart';
@@ -66,10 +67,10 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final SetAbRepeatUseCase _setAbRepeat;
   final AddBookmarkUseCase _addBookmark;
   final DeleteBookmarkUseCase _deleteBookmark;
-  // _checkTtsLimitはplayer_screen.dartのonLimitStatusコールバックで処理済み
   // ignore: unused_field
   final CheckTtsLimitUseCase _checkTtsLimit;
   final TtsService _ttsService;
+  final PlaybackRepository _playbackRepo;
 
   StreamSubscription<int>? _positionSubscription;
   StreamSubscription<TtsStatus>? _statusSubscription;
@@ -83,6 +84,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required DeleteBookmarkUseCase deleteBookmark,
     required CheckTtsLimitUseCase checkTtsLimit,
     required TtsService ttsService,
+    required PlaybackRepository playbackRepo,
   })  : _startPlayback = startPlayback,
         _stopPlayback = stopPlayback,
         _savePlaybackState = savePlaybackState,
@@ -91,13 +93,24 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _deleteBookmark = deleteBookmark,
         _checkTtsLimit = checkTtsLimit,
         _ttsService = ttsService,
+        _playbackRepo = playbackRepo,
         super(PlayerState()) {
     _listenToStreams();
   }
 
   void _listenToStreams() {
     _positionSubscription = _ttsService.positionStream.listen((position) {
-      state = state.copyWith(highlightPosition: position);
+      final content = state.content;
+      if (content == null || content.body.isEmpty) return;
+      final progressPct =
+          (position / content.body.length * 100).clamp(0.0, 100.0);
+      state = state.copyWith(
+        highlightPosition: position,
+        playbackState: state.playbackState?.copyWith(
+          position: position,
+          progressPct: progressPct,
+        ),
+      );
     });
 
     _statusSubscription = _ttsService.statusStream.listen((status) {
@@ -108,7 +121,26 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     });
   }
 
-  // 再生開始
+  Future<void> setContent(Content content) async {
+    state = state.copyWith(content: content, isLoading: true);
+    try {
+      final playbackState =
+          await _playbackRepo.getByContentId(content.id) ??
+              PlaybackState(contentId: content.id);
+      state = state.copyWith(
+        content: content,
+        playbackState: playbackState,
+        highlightPosition: playbackState.position,
+        isLoading: false,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: '再生状態の読み込みに失敗しました: $e',
+      );
+    }
+  }
+
   Future<void> play() async {
     if (state.content == null) return;
     try {
@@ -119,7 +151,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     }
   }
 
-  // 一時停止
   Future<void> pause() async {
     if (state.content == null) return;
     await _stopPlayback.pause(
@@ -129,7 +160,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     state = state.copyWith(isPlaying: false);
   }
 
-  // 停止
   Future<void> stop() async {
     if (state.content == null) return;
     await _stopPlayback.execute(
@@ -139,21 +169,187 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     state = state.copyWith(isPlaying: false);
   }
 
-  // 速度を変更して保存
-  Future<void> changeSpeed(double speed) async {
+  Future<void> seekToStart() async {
     if (state.content == null) return;
-    await _savePlaybackState.execute(
-      contentId: state.content!.id,
-      position: state.highlightPosition,
-      progressPct: state.playbackState?.progressPct ?? 0.0,
-      speed: speed,
-    );
-    state = state.copyWith(
-      playbackState: state.playbackState?.copyWith(speed: speed),
-    );
+    final wasPlaying = state.isPlaying;
+    state = state.copyWith(isLoading: true);
+    try {
+      if (wasPlaying) {
+        await _stopPlayback.execute(
+          state.content!.id,
+          state.highlightPosition,
+        );
+      }
+      await _savePlaybackState.execute(
+        contentId: state.content!.id,
+        position: 0,
+        progressPct: 0.0,
+      );
+      state = state.copyWith(
+        highlightPosition: 0,
+        playbackState: state.playbackState?.copyWith(
+          position: 0,
+          progressPct: 0.0,
+        ),
+        isPlaying: false,
+        isLoading: false,
+      );
+      if (wasPlaying) await play();
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: '先頭への移動に失敗しました: $e',
+      );
+    }
   }
 
-  // 音程を変更して保存
+  Future<void> seekToEnd() async {
+    if (state.content == null) return;
+    final wasPlaying = state.isPlaying;
+    state = state.copyWith(isLoading: true);
+    try {
+      if (wasPlaying) {
+        await _stopPlayback.execute(
+          state.content!.id,
+          state.highlightPosition,
+        );
+      }
+      final endPosition = state.content!.body.length;
+      await _savePlaybackState.execute(
+        contentId: state.content!.id,
+        position: endPosition,
+        progressPct: 100.0,
+      );
+      state = state.copyWith(
+        highlightPosition: endPosition,
+        playbackState: state.playbackState?.copyWith(
+          position: endPosition,
+          progressPct: 100.0,
+        ),
+        isPlaying: false,
+        isLoading: false,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: '末尾への移動に失敗しました: $e',
+      );
+    }
+  }
+
+  Future<void> rewind() async {
+    if (state.content == null) return;
+    final wasPlaying = state.isPlaying;
+    state = state.copyWith(isLoading: true);
+    try {
+      if (wasPlaying) {
+        await _stopPlayback.execute(
+          state.content!.id,
+          state.highlightPosition,
+        );
+      }
+      final speed = state.playbackState?.speed ?? 1.0;
+      final charsPerSecond = (5 * speed).round();
+      final rewindChars = 10 * charsPerSecond;
+      final newPosition = (state.highlightPosition - rewindChars)
+          .clamp(0, state.content!.body.length);
+      final progressPct =
+          (newPosition / state.content!.body.length * 100).clamp(0.0, 100.0);
+      await _savePlaybackState.execute(
+        contentId: state.content!.id,
+        position: newPosition,
+        progressPct: progressPct,
+      );
+      state = state.copyWith(
+        highlightPosition: newPosition,
+        playbackState: state.playbackState?.copyWith(
+          position: newPosition,
+          progressPct: progressPct,
+        ),
+        isPlaying: false,
+        isLoading: false,
+      );
+      if (wasPlaying) await play();
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: '巻き戻しに失敗しました: $e',
+      );
+    }
+  }
+
+  Future<void> fastForward() async {
+    if (state.content == null) return;
+    final wasPlaying = state.isPlaying;
+    state = state.copyWith(isLoading: true);
+    try {
+      if (wasPlaying) {
+        await _stopPlayback.execute(
+          state.content!.id,
+          state.highlightPosition,
+        );
+      }
+      final speed = state.playbackState?.speed ?? 1.0;
+      final charsPerSecond = (5 * speed).round();
+      final forwardChars = 10 * charsPerSecond;
+      final newPosition = (state.highlightPosition + forwardChars)
+          .clamp(0, state.content!.body.length);
+      final progressPct =
+          (newPosition / state.content!.body.length * 100).clamp(0.0, 100.0);
+      await _savePlaybackState.execute(
+        contentId: state.content!.id,
+        position: newPosition,
+        progressPct: progressPct,
+      );
+      state = state.copyWith(
+        highlightPosition: newPosition,
+        playbackState: state.playbackState?.copyWith(
+          position: newPosition,
+          progressPct: progressPct,
+        ),
+        isPlaying: false,
+        isLoading: false,
+      );
+      if (wasPlaying) await play();
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: '早送りに失敗しました: $e',
+      );
+    }
+  }
+
+  Future<void> changeSpeed(double speed) async {
+    if (state.content == null) return;
+    final wasPlaying = state.isPlaying;
+    state = state.copyWith(isLoading: true);
+    try {
+      if (wasPlaying) {
+        await _stopPlayback.execute(
+          state.content!.id,
+          state.highlightPosition,
+        );
+      }
+      await _savePlaybackState.execute(
+        contentId: state.content!.id,
+        position: state.highlightPosition,
+        progressPct: state.playbackState?.progressPct ?? 0.0,
+        speed: speed,
+      );
+      state = state.copyWith(
+        playbackState: state.playbackState?.copyWith(speed: speed),
+        isPlaying: false,
+        isLoading: false,
+      );
+      if (wasPlaying) await play();
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        errorMessage: '速度変更に失敗しました: $e',
+      );
+    }
+  }
+
   Future<void> changePitch(double pitch) async {
     if (state.content == null) return;
     await _savePlaybackState.execute(
@@ -167,7 +363,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     );
   }
 
-  // 音量を変更して保存
   Future<void> changeVolume(double volume) async {
     if (state.content == null) return;
     await _savePlaybackState.execute(
@@ -181,7 +376,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     );
   }
 
-  // 声の種類を変更して保存
   Future<void> changeVoice(String voiceId) async {
     if (state.content == null) return;
     await _savePlaybackState.execute(
@@ -195,7 +389,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     );
   }
 
-  // ブックマーク追加
   Future<void> addBookmark(String? label) async {
     if (state.content == null) return;
     try {
@@ -212,7 +405,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     }
   }
 
-  // ブックマーク削除
   Future<void> deleteBookmark(String bookmarkId) async {
     try {
       await _deleteBookmark.execute(bookmarkId);
@@ -224,7 +416,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     }
   }
 
-  // A-Bリピート設定
   Future<void> setAbRepeat(int start, int end) async {
     if (state.content == null) return;
     await _setAbRepeat.execute(
@@ -234,13 +425,11 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     );
   }
 
-  // A-Bリピート解除
   Future<void> clearAbRepeat() async {
     if (state.content == null) return;
     await _setAbRepeat.clear(state.content!.id);
   }
 
-  // シークバーで位置を変更
   Future<void> seekTo(double progressPct) async {
     if (state.content == null) return;
     final position =
@@ -250,12 +439,13 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       position: position,
       progressPct: progressPct,
     );
-    state = state.copyWith(highlightPosition: position);
-  }
-
-  // コンテンツをセット（initState時に呼び出す）
-  void setContent(Content content) {
-    state = state.copyWith(content: content);
+    state = state.copyWith(
+      highlightPosition: position,
+      playbackState: state.playbackState?.copyWith(
+        position: position,
+        progressPct: progressPct,
+      ),
+    );
   }
 
   void clearError() => state = state.copyWith(errorMessage: null);
@@ -268,5 +458,3 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     super.dispose();
   }
 }
-
-

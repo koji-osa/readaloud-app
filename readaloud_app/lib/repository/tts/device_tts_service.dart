@@ -1,35 +1,145 @@
 import 'dart:async';
+import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'tts_service.dart';
 
-class DeviceTtsService implements TtsService {
+class _TextChunk {
+  final String text;
+  final int startPosition;
+  _TextChunk({required this.text, required this.startPosition});
+}
+
+class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   final FlutterTts _tts = FlutterTts();
   final _positionController = StreamController<int>.broadcast();
   final _statusController = StreamController<TtsStatus>.broadcast();
 
-  String _currentText = '';
-  int _startPosition = 0;
+  List<_TextChunk> _chunks = [];
+  int _currentChunkIndex = 0;
+  bool _isStopped = false;
+  bool _isPaused = false;
   int _currentPosition = 0;
+  late final Future<void> _initFuture;
 
-  DeviceTtsService() {
-    _init();
+  // 停止後の再開用に最後の再生パラメータを保持
+  String? _lastText;
+  int _lastStoppedPosition = 0;
+  double _lastSpeed = 1.0;
+  double _lastPitch = 1.0;
+  double _lastVolume = 1.0;
+  String? _lastVoiceId;
+
+  TtsAudioHandler() {
+    _initFuture = _init();
   }
 
-  void _init() {
-    _tts.setLanguage('ja-JP');
+  Future<void> _init() async {
+    try {
+      // audio_sessionの設定（電話着信時の自動停止・再開）
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.speech());
+      session.interruptionEventStream.listen((event) {
+        if (event.begin) {
+          pause();
+        } else {
+          if (event.type == AudioInterruptionType.pause) {
+            play();
+          }
+        }
+      });
 
-    _tts.setProgressHandler((text, start, end, word) {
-      _currentPosition = _startPosition + start;
-      _positionController.add(_currentPosition);
-    });
+      await _tts.setLanguage('ja-JP');
 
-    _tts.setCompletionHandler(() {
-      _statusController.add(TtsStatus.stopped);
-    });
+      _tts.setCompletionHandler(() async {
+        try {
+          if (_isStopped || _isPaused) return;
+          _currentChunkIndex++;
+          if (_currentChunkIndex < _chunks.length) {
+            await _playChunk(_currentChunkIndex);
+          } else {
+            // 全チャンク再生完了
+            _lastText = null;
+            _statusController.add(TtsStatus.stopped);
+            playbackState.add(playbackState.value.copyWith(
+              playing: false,
+              processingState: AudioProcessingState.completed,
+              controls: [],
+            ));
+          }
+        } catch (e) {
+          _statusController.add(TtsStatus.error);
+        }
+      });
 
-    _tts.setErrorHandler((message) {
+      _tts.setErrorHandler((message) {
+        _statusController.add(TtsStatus.error);
+      });
+    } catch (e) {
       _statusController.add(TtsStatus.error);
-    });
+    }
+  }
+
+  Future<void> _playChunk(int index) async {
+    if (index >= _chunks.length) return;
+    final chunk = _chunks[index];
+    _currentPosition = chunk.startPosition;
+    _positionController.add(_currentPosition);
+    await _tts.speak(chunk.text);
+  }
+
+  List<_TextChunk> _splitText(String text, int startPosition) {
+    final chunks = <_TextChunk>[];
+
+    // startPositionの範囲チェック
+    final clampedStart = startPosition.clamp(0, text.length);
+    final targetText = text.substring(clampedStart);
+    int offset = clampedStart;
+
+    // 句読点で分割してセグメントを作成
+    final segments = <String>[];
+    final buffer = StringBuffer();
+    for (int i = 0; i < targetText.length; i++) {
+      buffer.write(targetText[i]);
+      final c = targetText[i];
+      if (c == '。' || c == '！' || c == '？' || c == '\n') {
+        segments.add(buffer.toString());
+        buffer.clear();
+      }
+      // 2,000文字上限で強制分割
+      if (buffer.length >= 2000) {
+        segments.add(buffer.toString());
+        buffer.clear();
+      }
+    }
+    if (buffer.isNotEmpty) {
+      segments.add(buffer.toString());
+    }
+
+    // セグメントを2,000文字以内のチャンクにまとめる
+    final chunkBuffer = StringBuffer();
+    int chunkStart = offset;
+    for (final seg in segments) {
+      if (chunkBuffer.length + seg.length > 2000) {
+        if (chunkBuffer.isNotEmpty) {
+          chunks.add(_TextChunk(
+            text: chunkBuffer.toString(),
+            startPosition: chunkStart,
+          ));
+          chunkStart += chunkBuffer.length;
+          chunkBuffer.clear();
+        }
+      }
+      chunkBuffer.write(seg);
+    }
+    if (chunkBuffer.isNotEmpty) {
+      chunks.add(_TextChunk(
+        text: chunkBuffer.toString(),
+        startPosition: chunkStart,
+      ));
+    }
+
+    return chunks;
   }
 
   @override
@@ -41,31 +151,105 @@ class DeviceTtsService implements TtsService {
     double volume = 1.0,
     String? voiceId,
   }) async {
-    _currentText = text;
-    _startPosition = startPosition;
+    await _initFuture;
+
+    // 再生パラメータを保持（停止後の再開用）
+    _lastText = text;
+    _lastSpeed = speed;
+    _lastPitch = pitch;
+    _lastVolume = volume;
+    _lastVoiceId = voiceId;
+    _lastStoppedPosition = startPosition;
+
+    // 前回の再生を確実に停止（フラグを先にtrueにして誤発火防止）
+    _isStopped = true;
+    _isPaused = false;
+    await _tts.stop();
+    await Future.delayed(const Duration(milliseconds: 100));
+    _isStopped = false;
 
     await _tts.setSpeechRate(speed * 0.5);
     await _tts.setPitch(pitch);
     await _tts.setVolume(volume);
-
     if (voiceId != null) {
       await _tts.setVoice({'name': voiceId, 'locale': 'ja-JP'});
     }
 
+    // テキストをチャンクに分割
+    _chunks = _splitText(text, startPosition);
+    _currentChunkIndex = 0;
+
+    if (_chunks.isEmpty) return;
+
+    // 通知領域にメディア情報を設定
+    mediaItem.add(const MediaItem(
+      id: 'tts_playback',
+      title: '読み上げ中',
+      artist: 'ReadAloud',
+    ));
+
     _statusController.add(TtsStatus.playing);
-    await _tts.speak(text.substring(startPosition));
+    playbackState.add(playbackState.value.copyWith(
+      playing: true,
+      processingState: AudioProcessingState.ready,
+      controls: [MediaControl.pause, MediaControl.stop],
+    ));
+
+    await _playChunk(0);
+  }
+
+  // 通知領域の再生ボタン・電話着信終了後の再開
+  @override
+  Future<void> play() async {
+    await _initFuture;
+    if (_isPaused && !_isStopped && _chunks.isNotEmpty) {
+      // 一時停止からの再開
+      _isPaused = false;
+      _statusController.add(TtsStatus.playing);
+      playbackState.add(playbackState.value.copyWith(
+        playing: true,
+        controls: [MediaControl.pause, MediaControl.stop],
+      ));
+      await _playChunk(_currentChunkIndex);
+    } else if (_isStopped && _lastText != null) {
+      // 停止後の再開（停止時の位置から）
+      await speak(
+        text: _lastText!,
+        startPosition: _lastStoppedPosition,
+        speed: _lastSpeed,
+        pitch: _lastPitch,
+        volume: _lastVolume,
+        voiceId: _lastVoiceId,
+      );
+    }
   }
 
   @override
   Future<void> pause() async {
+    await _initFuture;
+    _isPaused = true;
     await _tts.pause();
     _statusController.add(TtsStatus.paused);
+    playbackState.add(playbackState.value.copyWith(
+      playing: false,
+      controls: [MediaControl.play, MediaControl.stop],
+    ));
   }
 
   @override
   Future<void> stop() async {
+    await _initFuture;
+    // 停止時の位置を保持
+    _lastStoppedPosition = _currentPosition;
+    _isStopped = true;
+    _chunks = [];
     await _tts.stop();
     _statusController.add(TtsStatus.stopped);
+    playbackState.add(playbackState.value.copyWith(
+      playing: false,
+      processingState: AudioProcessingState.idle,
+      controls: [MediaControl.play],
+    ));
   }
 
   @override
@@ -73,11 +257,13 @@ class DeviceTtsService implements TtsService {
     final voices = await _tts.getVoices;
     if (voices == null) return [];
     return (voices as List).map((v) {
-      final map = v as Map;
+      final map = v as Map<dynamic, dynamic>;
+      final id = map['name']?.toString() ?? '';
+      final locale = map['locale']?.toString() ?? 'ja-JP';
       return VoiceInfo(
-        id: map['name'] ?? '',
-        name: map['name'] ?? '',
-        languageCode: map['locale'] ?? 'ja-JP',
+        id: id,
+        name: id,
+        languageCode: locale,
         gender: 'neutral',
       );
     }).toList();
@@ -89,10 +275,7 @@ class DeviceTtsService implements TtsService {
   @override
   Stream<TtsStatus> get statusStream => _statusController.stream;
 
+  // シングルトンのためdispose()は何もしない
   @override
-  Future<void> dispose() async {
-    await _tts.stop();
-    await _positionController.close();
-    await _statusController.close();
-  }
+  Future<void> dispose() async {}
 }

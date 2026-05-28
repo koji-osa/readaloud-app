@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 
 class SeekBar extends StatelessWidget {
   final double progress; // 0.0〜100.0
+  final int totalChars;
+  final double speed;
   final Function(double) onChanged;
 
   const SeekBar({
     super.key,
     required this.progress,
+    required this.totalChars,
+    required this.speed,
     required this.onChanged,
   });
 
@@ -65,11 +69,14 @@ class SeekBar extends StatelessWidget {
     );
   }
 
-  String _formatTime(double progress) {
-    // 仮の時間表示（実際はコンテンツの文字数と速度から計算）
-    final seconds = (progress * 1.2).round();
-    final m = seconds ~/ 60;
-    final s = seconds % 60;
+  String _formatTime(double progressPct) {
+    if (totalChars <= 0 || speed <= 0) return '0:00';
+    const baseCharsPerSecond = 5.0;
+    final charsPerSecond = baseCharsPerSecond * speed;
+    final totalSeconds = totalChars / charsPerSecond;
+    final currentSeconds = (totalSeconds * progressPct / 100).round();
+    final m = currentSeconds ~/ 60;
+    final s = currentSeconds % 60;
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 }
