@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:rxdart/rxdart.dart';
 import 'tts_service.dart';
 
 class _TextChunk {
@@ -12,8 +13,8 @@ class _TextChunk {
 
 class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   final FlutterTts _tts = FlutterTts();
-  final _positionController = StreamController<int>.broadcast();
-  final _statusController = StreamController<TtsStatus>.broadcast();
+  final _positionController = BehaviorSubject<int>.seeded(0);
+  final _statusController = BehaviorSubject<TtsStatus>.seeded(TtsStatus.stopped);
 
   List<_TextChunk> _chunks = [];
   int _currentChunkIndex = 0;
