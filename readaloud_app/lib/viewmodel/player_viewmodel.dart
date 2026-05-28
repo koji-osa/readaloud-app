@@ -6,7 +6,9 @@ import '../model/bookmark.dart';
 import '../repository/playback_repository.dart';
 import '../repository/settings_repository.dart';
 import '../model/setting.dart';
+import '../model/tts_playback_position.dart';
 import '../repository/tts/tts_service.dart';
+import '../repository/tts/device_tts_service.dart';
 import '../usecase/playback/start_playback_usecase.dart';
 import '../usecase/playback/stop_playback_usecase.dart';
 import '../usecase/playback/save_playback_state_usecase.dart';
@@ -71,12 +73,11 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final DeleteBookmarkUseCase _deleteBookmark;
   // ignore: unused_field
   final CheckTtsLimitUseCase _checkTtsLimit;
-  final TtsService _ttsService;
+  final TtsAudioHandler _audioHandler;
   final PlaybackRepository _playbackRepo;
   final SettingsRepository _settingsRepo;
 
-  StreamSubscription<int>? _positionSubscription;
-  StreamSubscription<TtsStatus>? _statusSubscription;
+  StreamSubscription<dynamic>? _playbackStateSubscription;
 
   PlayerViewModel({
     required StartPlaybackUseCase startPlayback,
@@ -86,7 +87,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required AddBookmarkUseCase addBookmark,
     required DeleteBookmarkUseCase deleteBookmark,
     required CheckTtsLimitUseCase checkTtsLimit,
-    required TtsService ttsService,
+    required TtsAudioHandler audioHandler,
     required PlaybackRepository playbackRepo,
     required SettingsRepository settingsRepo,
   })  : _startPlayback = startPlayback,
@@ -96,7 +97,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _addBookmark = addBookmark,
         _deleteBookmark = deleteBookmark,
         _checkTtsLimit = checkTtsLimit,
-        _ttsService = ttsService,
+        _audioHandler = audioHandler,
         _playbackRepo = playbackRepo,
         _settingsRepo = settingsRepo,
         super(PlayerState()) {
@@ -104,24 +105,23 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   }
 
   void _listenToStreams() {
-    _positionSubscription = _ttsService.positionStream.listen((position) {
+    _playbackStateSubscription = _audioHandler.customState.listen((data) {
+      if (data is! TtsPlaybackPosition) return;
       final content = state.content;
       if (content == null || content.body.isEmpty) return;
+
+      final position = data.charPosition;
       final progressPct =
           (position / content.body.length * 100).clamp(0.0, 100.0);
+
       state = state.copyWith(
         highlightPosition: position,
+        isPlaying: data.isPlaying,
+        ttsStatus: data.ttsStatus,
         playbackState: state.playbackState?.copyWith(
           position: position,
           progressPct: progressPct,
         ),
-      );
-    });
-
-    _statusSubscription = _ttsService.statusStream.listen((status) {
-      state = state.copyWith(
-        ttsStatus: status,
-        isPlaying: status == TtsStatus.playing,
       );
     });
   }
@@ -467,8 +467,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
 
   @override
   void dispose() {
-    _positionSubscription?.cancel();
-    _statusSubscription?.cancel();
+    _playbackStateSubscription?.cancel();
     _startPlayback.dispose();
     super.dispose();
   }

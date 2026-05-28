@@ -18,12 +18,6 @@ abstract class TtsService {
   // 利用可能な声の一覧を取得
   Future<List<VoiceInfo>> getAvailableVoices();
 
-  // 再生位置ストリーム（文字インデックスを流す）
-  Stream<int> get positionStream;
-
-  // 再生状態ストリーム
-  Stream<TtsStatus> get statusStream;
-
   // リソース解放
   Future<void> dispose();
 }

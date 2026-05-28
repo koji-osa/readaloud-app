@@ -15,7 +15,6 @@ import '../../repository/impl/content_repository_impl.dart';
 import '../../repository/impl/playback_repository_impl.dart';
 import '../../repository/impl/bookmark_repository_impl.dart';
 import '../../repository/impl/settings_repository_impl.dart';
-import '../../repository/tts/device_tts_service.dart';
 
 import 'widgets/highlight_text.dart';
 import 'widgets/seek_bar.dart';
@@ -28,7 +27,7 @@ final playerViewModelProvider =
   final playbackRepo = PlaybackRepositoryImpl();
   final bookmarkRepo = BookmarkRepositoryImpl();
   final settingsRepo = SettingsRepositoryImpl();
-  final ttsService   = ref.read(audioHandlerProvider);
+  final audioHandler = ref.read(audioHandlerProvider);
 
   final checkTtsLimit = CheckTtsLimitUseCase(
     settingsRepo: settingsRepo,
@@ -50,12 +49,13 @@ final playerViewModelProvider =
     startPlayback: StartPlaybackUseCase(
       contentRepo: contentRepo,
       playbackRepo: playbackRepo,
-      ttsService: ttsService,
+      ttsHandler: audioHandler,
+      ttsService: audioHandler,
       countUsage: countTtsUsage,
     ),
     stopPlayback: StopPlaybackUseCase(
       playbackRepo: playbackRepo,
-      ttsService: ttsService,
+      ttsService: audioHandler,
       countUsage: countTtsUsage,
       saveState: savePlaybackState,
     ),
@@ -64,7 +64,7 @@ final playerViewModelProvider =
     addBookmark: AddBookmarkUseCase(bookmarkRepo),
     deleteBookmark: DeleteBookmarkUseCase(bookmarkRepo),
     checkTtsLimit: checkTtsLimit,
-    ttsService: ttsService,
+    audioHandler: audioHandler,
     playbackRepo: playbackRepo,
   );
 });
@@ -96,9 +96,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _loadAvailableVoices() async {
-    final ttsService = ref.read(audioHandlerProvider);
+    final audioHandler = ref.read(audioHandlerProvider);
     try {
-      final voices = await ttsService.getAvailableVoices();
+      final voices = await audioHandler.getAvailableVoices();
       final jaVoices = voices
           .where((v) => v.languageCode.startsWith('ja'))
           .map((v) => v.id)

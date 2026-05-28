@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:rxdart/rxdart.dart';
+import '../../model/tts_playback_position.dart';
 import 'tts_service.dart';
 
 class _TextChunk {
@@ -13,8 +13,6 @@ class _TextChunk {
 
 class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   final FlutterTts _tts = FlutterTts();
-  final _positionController = BehaviorSubject<int>.seeded(0);
-  final _statusController = BehaviorSubject<TtsStatus>.seeded(TtsStatus.stopped);
 
   List<_TextChunk> _chunks = [];
   int _currentChunkIndex = 0;
@@ -63,7 +61,11 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
           } else {
             // 全チャンク再生完了
             _lastText = null;
-            _statusController.add(TtsStatus.stopped);
+            customState.add(TtsPlaybackPosition(
+              charPosition: _currentPosition,
+              isPlaying: false,
+              ttsStatus: TtsStatus.stopped,
+            ));
             playbackState.add(playbackState.value.copyWith(
               playing: false,
               processingState: AudioProcessingState.completed,
@@ -71,15 +73,27 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
             ));
           }
         } catch (e) {
-          _statusController.add(TtsStatus.error);
+          customState.add(TtsPlaybackPosition(
+            charPosition: _currentPosition,
+            isPlaying: false,
+            ttsStatus: TtsStatus.error,
+          ));
         }
       });
 
       _tts.setErrorHandler((message) {
-        _statusController.add(TtsStatus.error);
+        customState.add(TtsPlaybackPosition(
+          charPosition: _currentPosition,
+          isPlaying: false,
+          ttsStatus: TtsStatus.error,
+        ));
       });
     } catch (e) {
-      _statusController.add(TtsStatus.error);
+      customState.add(TtsPlaybackPosition(
+        charPosition: 0,
+        isPlaying: false,
+        ttsStatus: TtsStatus.error,
+      ));
     }
   }
 
@@ -87,7 +101,11 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     if (index >= _chunks.length) return;
     final chunk = _chunks[index];
     _currentPosition = chunk.startPosition;
-    _positionController.add(_currentPosition);
+    customState.add(TtsPlaybackPosition(
+      charPosition: _currentPosition,
+      isPlaying: true,
+      ttsStatus: TtsStatus.playing,
+    ));
 
     // タイマーで推定位置を定期更新（500ms間隔）
     _positionTimer?.cancel();
@@ -106,7 +124,11 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       final estimatedPosition = (chunk.startPosition + estimatedOffset)
           .clamp(chunk.startPosition, nextChunkStart - 1);
       _currentPosition = estimatedPosition;
-      _positionController.add(_currentPosition);
+      customState.add(TtsPlaybackPosition(
+        charPosition: _currentPosition,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
     });
 
     await _tts.speak(chunk.text);
@@ -213,7 +235,11 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       artist: 'ReadAloud',
     ));
 
-    _statusController.add(TtsStatus.playing);
+    customState.add(TtsPlaybackPosition(
+      charPosition: _currentPosition,
+      isPlaying: true,
+      ttsStatus: TtsStatus.playing,
+    ));
     playbackState.add(playbackState.value.copyWith(
       playing: true,
       processingState: AudioProcessingState.ready,
@@ -230,7 +256,11 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     if (_isPaused && !_isStopped && _chunks.isNotEmpty) {
       // 一時停止からの再開
       _isPaused = false;
-      _statusController.add(TtsStatus.playing);
+      customState.add(TtsPlaybackPosition(
+        charPosition: _currentPosition,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
       playbackState.add(playbackState.value.copyWith(
         playing: true,
         controls: [MediaControl.pause, MediaControl.stop],
@@ -255,7 +285,11 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _positionTimer?.cancel();
     _isPaused = true;
     await _tts.pause();
-    _statusController.add(TtsStatus.paused);
+    customState.add(TtsPlaybackPosition(
+      charPosition: _currentPosition,
+      isPlaying: false,
+      ttsStatus: TtsStatus.paused,
+    ));
     playbackState.add(playbackState.value.copyWith(
       playing: false,
       controls: [MediaControl.play, MediaControl.stop],
@@ -271,7 +305,11 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _isStopped = true;
     _chunks = [];
     await _tts.stop();
-    _statusController.add(TtsStatus.stopped);
+    customState.add(TtsPlaybackPosition(
+      charPosition: _currentPosition,
+      isPlaying: false,
+      ttsStatus: TtsStatus.stopped,
+    ));
     playbackState.add(playbackState.value.copyWith(
       playing: false,
       processingState: AudioProcessingState.idle,
@@ -295,12 +333,6 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       );
     }).toList();
   }
-
-  @override
-  Stream<int> get positionStream => _positionController.stream;
-
-  @override
-  Stream<TtsStatus> get statusStream => _statusController.stream;
 
   // シングルトンのためdispose()は何もしない
   @override

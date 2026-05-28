@@ -51,12 +51,6 @@ class OpenAITtsService implements TtsService {
   }
 
   @override
-  Stream<int> get positionStream => const Stream.empty();
-
-  @override
-  Stream<TtsStatus> get statusStream => const Stream.empty();
-
-  @override
   Future<void> dispose() async {
     // TODO: リソース解放処理
   }

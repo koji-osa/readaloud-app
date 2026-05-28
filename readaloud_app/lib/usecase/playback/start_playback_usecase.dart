@@ -1,25 +1,30 @@
 import 'dart:async';
+import '../../model/tts_playback_position.dart';
 import '../../repository/content_repository.dart';
 import '../../repository/playback_repository.dart';
 import '../../repository/tts/tts_service.dart';
+import '../../repository/tts/device_tts_service.dart';
 import '../../model/playback_state.dart';
 import '../tts/count_tts_usage_usecase.dart';
 
 class StartPlaybackUseCase {
   final ContentRepository _contentRepo;
   final PlaybackRepository _playbackRepo;
+  final TtsAudioHandler _ttsHandler;
   final TtsService _ttsService;
   final CountTtsUsageUseCase _countUsage;
 
-  StreamSubscription<int>? _positionSubscription;
+  StreamSubscription<dynamic>? _positionSubscription;
 
   StartPlaybackUseCase({
     required ContentRepository contentRepo,
     required PlaybackRepository playbackRepo,
+    required TtsAudioHandler ttsHandler,
     required TtsService ttsService,
     required CountTtsUsageUseCase countUsage,
   })  : _contentRepo = contentRepo,
         _playbackRepo = playbackRepo,
+        _ttsHandler = ttsHandler,
         _ttsService = ttsService,
         _countUsage = countUsage;
 
@@ -36,10 +41,12 @@ class StartPlaybackUseCase {
       content.copyWith(status: 'in_progress'),
     );
 
-    // positionStreamを購読してCountTtsUsageUseCaseに位置を通知
+    // customStateを購読してCountTtsUsageUseCaseに位置を通知
     _positionSubscription?.cancel();
-    _positionSubscription = _ttsService.positionStream.listen((position) {
-      _countUsage.updatePosition(position);
+    _positionSubscription = _ttsHandler.customState.listen((data) {
+      if (data is TtsPlaybackPosition) {
+        _countUsage.updatePosition(data.charPosition);
+      }
     });
 
     // TTS使用量カウント開始

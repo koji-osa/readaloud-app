@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'tts_service.dart';
@@ -13,11 +12,8 @@ class GoogleTtsService implements TtsService {
   final String apiKey;
   final Dio _dio = Dio();
   final FlutterTts _playerTts = FlutterTts();
-  final _positionController = StreamController<int>.broadcast();
-  final _statusController = StreamController<TtsStatus>.broadcast();
 
-  int _startPosition = 0;
-  int _currentPosition = 0;
+
 
   static const String _baseUrl =
       'https://texttospeech.googleapis.com/v1/text:synthesize';
@@ -28,16 +24,12 @@ class GoogleTtsService implements TtsService {
 
   void _initPlayer() {
     _playerTts.setProgressHandler((text, start, end, word) {
-      _currentPosition = _startPosition + start;
-      _positionController.add(_currentPosition);
     });
 
     _playerTts.setCompletionHandler(() {
-      _statusController.add(TtsStatus.stopped);
     });
 
     _playerTts.setErrorHandler((message) {
-      _statusController.add(TtsStatus.error);
     });
   }
 
@@ -50,11 +42,10 @@ class GoogleTtsService implements TtsService {
     double volume = 1.0,
     String? voiceId,
   }) async {
-    _startPosition = startPosition;
     final speakText = text.substring(startPosition);
 
     try {
-      final response = await _dio.post(
+      await _dio.post(
         '$_baseUrl?key=$apiKey',
         data: {
           'input': {'text': speakText},
@@ -71,15 +62,12 @@ class GoogleTtsService implements TtsService {
         },
       );
 
-      final audioContent = response.data['audioContent'] as String;
+      // final audioContent = response.data['audioContent'] as String; // TODO: MP3再生実装時に使用
       // TODO: base64デコードしたMP3データをaudioplayersで再生する
-      final audioBytes = base64Decode(audioContent);
 
       await _playerTts.setVolume(volume);
-      _statusController.add(TtsStatus.playing);
       await _playerTts.speak(speakText);
     } catch (e) {
-      _statusController.add(TtsStatus.error);
       rethrow;
     }
   }
@@ -87,13 +75,11 @@ class GoogleTtsService implements TtsService {
   @override
   Future<void> pause() async {
     await _playerTts.pause();
-    _statusController.add(TtsStatus.paused);
   }
 
   @override
   Future<void> stop() async {
     await _playerTts.stop();
-    _statusController.add(TtsStatus.stopped);
   }
 
   @override
@@ -122,15 +108,7 @@ class GoogleTtsService implements TtsService {
   }
 
   @override
-  Stream<int> get positionStream => _positionController.stream;
-
-  @override
-  Stream<TtsStatus> get statusStream => _statusController.stream;
-
-  @override
   Future<void> dispose() async {
     await _playerTts.stop();
-    await _positionController.close();
-    await _statusController.close();
   }
 }
