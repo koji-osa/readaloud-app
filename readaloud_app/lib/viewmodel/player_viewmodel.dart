@@ -445,6 +445,13 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     await _setAbRepeat.clear(state.content!.id);
   }
 
+  Future<void> seekToBookmark(int position) async {
+    if (state.content == null || state.content!.body.isEmpty) return;
+    final progressPct =
+        (position / state.content!.body.length * 100).clamp(0.0, 100.0);
+    await seekTo(progressPct);
+  }
+
   Future<void> seekTo(double progressPct) async {
     if (state.content == null) return;
     final position =

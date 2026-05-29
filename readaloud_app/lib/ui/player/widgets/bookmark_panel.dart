@@ -5,12 +5,14 @@ class BookmarkPanel extends StatelessWidget {
   final List<Bookmark> bookmarks;
   final VoidCallback onAdd;
   final Function(String) onDelete;
+  final Function(int) onJump;
 
   const BookmarkPanel({
     super.key,
     required this.bookmarks,
     required this.onAdd,
     required this.onDelete,
+    required this.onJump,
   });
 
   @override

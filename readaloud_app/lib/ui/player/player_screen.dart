@@ -1,3 +1,4 @@
+import '../../model/tts_playback_position.dart';
 import '../../providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -149,6 +150,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ],
               ),
             ),
+            // デバッグ表示（customState確認用）
+            StreamBuilder(
+              stream: ref.read(audioHandlerProvider).customState,
+              builder: (context, snapshot) {
+                final data = snapshot.data;
+                final pos = data is TtsPlaybackPosition ? data.charPosition.toString() : 'N/A';
+                final playing = data is TtsPlaybackPosition ? data.isPlaying.toString() : 'N/A';
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  color: const Color(0xFF1A1A2E),
+                  child: Text(
+                    'DEBUG pos=$pos playing=$playing',
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF9B6FE0)),
+                  ),
+                );
+              },
+            ),
             // ローディング表示
             if (state.isLoading)
               const LinearProgressIndicator(
@@ -208,6 +226,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 bookmarks: state.bookmarks,
                 onAdd: () => _showAddBookmarkDialog(context, vm),
                 onDelete: (id) => vm.deleteBookmark(id),
+                onJump: (position) => vm.seekToBookmark(position),
               ),
             ),
             // 再生コントロール
