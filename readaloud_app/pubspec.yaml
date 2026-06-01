@@ -1,7 +1,7 @@
 name: readaloud_app
 description: テキスト読み上げアプリ
 publish_to: 'none'
-version: 1.0.7+7
+version: 1.0.8+8
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -33,7 +33,6 @@ dependencies:
   audio_service: ^0.18.17
   # 音声フォーカス管理（電話着信時の自動停止）
   audio_session: ^0.1.21
-  rxdart: ^0.28.0
   # バックグラウンド再生
   # 音声フォーカス管理（電話着信時の自動停止）
   syncfusion_flutter_pdf: ^26.2.14

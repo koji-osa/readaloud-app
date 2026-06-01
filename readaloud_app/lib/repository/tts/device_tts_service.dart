@@ -60,6 +60,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
             await _playChunk(_currentChunkIndex);
           } else {
             // 全チャンク再生完了
+            _positionTimer?.cancel();
             _lastText = null;
             customState.add(TtsPlaybackPosition(
               charPosition: _currentPosition,
@@ -132,7 +133,6 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     });
 
     await _tts.speak(chunk.text);
-    _positionTimer?.cancel();
   }
 
   List<_TextChunk> _splitText(String text, int startPosition) {

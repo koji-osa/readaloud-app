@@ -90,8 +90,17 @@ class _HighlightTextState extends State<HighlightText> {
     );
 
     if (pos == 0) {
+      // 再生開始時は最初の一文をハイライト表示
+      final firstSentenceEnd = _findSentenceEnd(widget.text, 0);
       return [
-        TextSpan(text: widget.text, style: beforeStyle),
+        TextSpan(
+          text: widget.text.substring(0, firstSentenceEnd),
+          style: highlightStyle,
+        ),
+        TextSpan(
+          text: widget.text.substring(firstSentenceEnd),
+          style: beforeStyle,
+        ),
       ];
     }
 
