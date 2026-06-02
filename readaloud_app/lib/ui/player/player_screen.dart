@@ -72,8 +72,9 @@ final playerViewModelProvider =
 
 class PlayerScreen extends ConsumerStatefulWidget {
   final Content content;
+  final bool autoPlay;
 
-  const PlayerScreen({super.key, required this.content});
+  const PlayerScreen({super.key, required this.content, this.autoPlay = false});
 
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
@@ -90,6 +91,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         final vm = ref.read(playerViewModelProvider.notifier);
         await vm.setContent(widget.content);
         await _loadAvailableVoices();
+        if (widget.autoPlay) {
+          await vm.play();
+        }
       } catch (e) {
         // ViewModelのerrorMessageで表示されるため基本的には不要
       }

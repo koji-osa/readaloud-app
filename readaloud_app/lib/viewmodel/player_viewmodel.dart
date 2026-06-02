@@ -141,6 +141,8 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
           contentId: content.id,
           speed: defaultSpeed,
         );
+        // 初回はDBに保存して設定速度を永続化
+        await _playbackRepo.save(playbackState);
       }
       state = state.copyWith(
         content: content,

@@ -61,7 +61,7 @@ class _AddScreenState extends ConsumerState<AddScreen>
   Future<void> _startReading(Content content) async {
     if (mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => PlayerScreen(content: content)),
+        MaterialPageRoute(builder: (_) => PlayerScreen(content: content, autoPlay: true)),
       );
     }
   }
