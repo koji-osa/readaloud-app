@@ -221,6 +221,8 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     await _tts.speak('.');
     await Future.delayed(const Duration(milliseconds: 300));
     await _tts.stop();
+    // A2DP確立後にメディアセッションをアクティブ化
+    await AudioService.androidForceEnableMediaButtons();
 
     await _tts.setSpeechRate(speed * 0.5);
     await _tts.setPitch(pitch);

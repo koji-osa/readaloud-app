@@ -34,6 +34,8 @@ void main() async {
   await initTts.speak('.');
   await Future.delayed(const Duration(milliseconds: 300));
   await initTts.stop();
+  // A2DP確立後にメディアセッションをアクティブ化
+  await AudioService.androidForceEnableMediaButtons();
 
   runApp(
     ProviderScope(
