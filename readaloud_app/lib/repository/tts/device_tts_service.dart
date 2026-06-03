@@ -61,7 +61,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
           } else {
             // 全チャンク再生完了
             _positionTimer?.cancel();
-            // 全チャンク完了: _lastTextを保持して先頭位置にリセット（Bluetooth操作で先頭から再生可能）
+            _isStopped = true;
             _lastStoppedPosition = 0;
             customState.add(TtsPlaybackPosition(
               charPosition: _currentPosition,

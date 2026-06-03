@@ -26,7 +26,6 @@ void main() async {
     ),
   );
 
-  await AudioService.androidForceEnableMediaButtons();
 
   runApp(
     ProviderScope(
