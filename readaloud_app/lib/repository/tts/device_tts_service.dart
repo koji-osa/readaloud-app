@@ -201,8 +201,6 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   }) async {
     await _initFuture;
     // メディアセッションをアクティブ化（Bluetooth・通知ボタン対応）
-    await AudioService.androidForceEnableMediaButtons();
-
     // 再生パラメータを保持（停止後の再開用）
     _lastText = text;
     _lastSpeed = speed;
@@ -217,6 +215,12 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     await _tts.stop();
     await Future.delayed(const Duration(milliseconds: 100));
     _isStopped = false;
+
+    // Bluetooth A2DP接続を確立（極小音量でダミー音声を流してブツっ音を防止）
+    await _tts.setVolume(0.01);
+    await _tts.speak('.');
+    await Future.delayed(const Duration(milliseconds: 300));
+    await _tts.stop();
 
     await _tts.setSpeechRate(speed * 0.5);
     await _tts.setPitch(pitch);
@@ -257,7 +261,6 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   Future<void> play() async {
     await _initFuture;
     // メディアセッションをアクティブ化（Bluetooth・通知ボタン対応）
-    await AudioService.androidForceEnableMediaButtons();
     if (_isPaused && !_isStopped && _chunks.isNotEmpty) {
       // 一時停止からの再開
       _isPaused = false;

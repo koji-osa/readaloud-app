@@ -1,5 +1,6 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/home/home_screen.dart';
@@ -26,6 +27,13 @@ void main() async {
     ),
   );
 
+
+  // Bluetooth A2DP接続を確立（起動時・極小音量でダミー音声を流してブツっ音を防止）
+  final initTts = FlutterTts();
+  await initTts.setVolume(0.01);
+  await initTts.speak('.');
+  await Future.delayed(const Duration(milliseconds: 300));
+  await initTts.stop();
 
   runApp(
     ProviderScope(
