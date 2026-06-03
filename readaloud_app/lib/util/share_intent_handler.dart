@@ -26,6 +26,8 @@ class ShareIntentHandler {
   Future<String?> getInitialSharedText() async {
     final files =
         await FlutterSharingIntent.instance.getInitialSharing();
+    // 取得後にリセット（再起動時に同じテキストが表示されないよう）
+    FlutterSharingIntent.instance.reset();
     for (final file in files) {
       if (file.type == SharedMediaType.TEXT && file.value != null) {
         return file.value;

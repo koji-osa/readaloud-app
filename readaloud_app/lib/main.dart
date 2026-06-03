@@ -16,6 +16,13 @@ import 'util/share_intent_handler.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Bluetooth A2DP接続を先に確立（AudioService.init()前に極小音量TTS）
+  final preTts = FlutterTts();
+  await preTts.setVolume(0.01);
+  await preTts.speak('.');
+  await Future.delayed(const Duration(milliseconds: 300));
+  await preTts.stop();
+
   // audio_service初期化（TtsAudioHandlerのシングルトンを生成）
   final audioHandler = await AudioService.init(
     builder: () => TtsAudioHandler(),
@@ -28,12 +35,6 @@ void main() async {
   );
 
 
-  // Bluetooth A2DP接続を確立（起動時・極小音量でダミー音声を流してブツっ音を防止）
-  final initTts = FlutterTts();
-  await initTts.setVolume(0.01);
-  await initTts.speak('.');
-  await Future.delayed(const Duration(milliseconds: 300));
-  await initTts.stop();
   // A2DP確立後にメディアセッションをアクティブ化
   await AudioService.androidForceEnableMediaButtons();
 
