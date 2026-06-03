@@ -29,7 +29,6 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   double _lastVolume = 1.0;
   String? _lastVoiceId;
   Timer? _positionTimer;
-  DateTime? _chunkStartTime;
 
   TtsAudioHandler() {
     _initFuture = _init();
@@ -51,6 +50,20 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       });
 
       await _tts.setLanguage('ja-JP');
+
+      // setProgressHandlerで実際の読み上げ位置をリアルタイム取得（FIX-019）
+      _tts.setProgressHandler((text, startOffset, endOffset, word) {
+        if (_isStopped || _isPaused) return;
+        if (_currentChunkIndex >= _chunks.length) return;
+        final chunkStart = _chunks[_currentChunkIndex].startPosition;
+        final absolutePosition = chunkStart + startOffset;
+        _currentPosition = absolutePosition;
+        customState.add(TtsPlaybackPosition(
+          charPosition: _currentPosition,
+          isPlaying: true,
+          ttsStatus: TtsStatus.playing,
+        ));
+      });
 
       _tts.setCompletionHandler(() async {
         try {
@@ -109,29 +122,8 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       ttsStatus: TtsStatus.playing,
     ));
 
-    // タイマーで推定位置を定期更新（500ms間隔）
+    // setProgressHandlerで位置更新するためタイマー不要（FIX-019）
     _positionTimer?.cancel();
-    _chunkStartTime = DateTime.now();
-    _positionTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-      if (_isStopped || _isPaused) {
-        timer.cancel();
-        return;
-      }
-      final elapsed = DateTime.now().difference(_chunkStartTime!).inMilliseconds;
-      final charsPerMs = (5.0 * _lastSpeed) / 1000.0;
-      final estimatedOffset = (elapsed * charsPerMs).round();
-      final nextChunkStart = (index + 1 < _chunks.length)
-          ? _chunks[index + 1].startPosition
-          : (_chunks.last.startPosition + _chunks.last.text.length);
-      final estimatedPosition = (chunk.startPosition + estimatedOffset)
-          .clamp(chunk.startPosition, nextChunkStart - 1);
-      _currentPosition = estimatedPosition;
-      customState.add(TtsPlaybackPosition(
-        charPosition: _currentPosition,
-        isPlaying: true,
-        ttsStatus: TtsStatus.playing,
-      ));
-    });
 
     await _tts.speak(chunk.text);
   }

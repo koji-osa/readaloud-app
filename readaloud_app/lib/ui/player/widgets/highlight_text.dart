@@ -31,14 +31,17 @@ class _HighlightTextState extends State<HighlightText> {
 
     final ratio = widget.highlightPosition / widget.text.length;
     final maxScroll = _scrollController.position.maxScrollExtent;
-    final targetScroll = (maxScroll * ratio).clamp(0.0, maxScroll);
+    // ハイライト位置が画面の上から30%に来るよう調整（FIX-020）
+    final viewportHeight = _scrollController.position.viewportDimension;
+    final targetScroll = (maxScroll * ratio - viewportHeight * 0.3)
+        .clamp(0.0, maxScroll);
 
     // 現在のスクロール位置から大きくずれている場合のみスクロール
     final currentScroll = _scrollController.offset;
-    if ((targetScroll - currentScroll).abs() > 100) {
+    if ((targetScroll - currentScroll).abs() > 50) {
       _scrollController.animateTo(
         targetScroll,
-        duration: const Duration(milliseconds: 300),
+        duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
       );
     }
