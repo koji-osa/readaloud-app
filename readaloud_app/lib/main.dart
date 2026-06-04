@@ -1,6 +1,5 @@
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/home/home_screen.dart';
@@ -16,13 +15,6 @@ import 'util/share_intent_handler.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Bluetooth A2DP接続を先に確立（AudioService.init()前に極小音量TTS）
-  final preTts = FlutterTts();
-  await preTts.setVolume(0.01);
-  await preTts.speak('.');
-  await Future.delayed(const Duration(milliseconds: 300));
-  await preTts.stop();
-
   // audio_service初期化（TtsAudioHandlerのシングルトンを生成）
   final audioHandler = await AudioService.init(
     builder: () => TtsAudioHandler(),
@@ -35,7 +27,6 @@ void main() async {
   );
 
 
-  // A2DP確立後にメディアセッションをアクティブ化
   await AudioService.androidForceEnableMediaButtons();
 
   runApp(

@@ -123,7 +123,7 @@ class HomeScreen extends ConsumerWidget {
                             final content = state.contents[index];
                             return ContentCard(
                               content: content,
-                              onTap: () => _openPlayer(context, content),
+                              onTap: () => _openPlayer(context, ref, content),
                               onDelete: () =>
                                   _confirmDelete(context, ref, content),
                               onEditTitle: (newTitle) =>
@@ -150,10 +150,12 @@ class HomeScreen extends ConsumerWidget {
     );
   }
 
-  void _openPlayer(BuildContext context, Content content) {
-    Navigator.of(context).push(
+  Future<void> _openPlayer(BuildContext context, WidgetRef ref, Content content) async {
+    await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => PlayerScreen(content: content)),
     );
+    // PlayerScreenから戻った時にコンテンツ一覧を更新
+    ref.read(contentListViewModelProvider.notifier).loadContents();
   }
 
   Future<void> _confirmDelete(
