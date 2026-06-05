@@ -8,6 +8,7 @@ import '../../usecase/content/extract_pdf_content_usecase.dart';
 import '../../repository/impl/content_repository_impl.dart';
 import '../../model/content.dart';
 import '../player/player_screen.dart';
+import '../home/home_screen.dart';
 
 final addContentViewModelProvider =
     StateNotifierProvider.autoDispose<AddContentViewModel, AddContentState>(
@@ -60,6 +61,8 @@ class _AddScreenState extends ConsumerState<AddScreen>
 
   Future<void> _startReading(Content content) async {
     if (mounted) {
+      // 保存完了後・画面遷移前に一覧を更新（FIX-024）
+      ref.read(contentListViewModelProvider.notifier).loadContents();
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => PlayerScreen(content: content, autoPlay: true)),
       );

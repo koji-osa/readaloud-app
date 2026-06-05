@@ -19,6 +19,9 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   bool _isStopped = false;
   bool _isPaused = false;
   int _currentPosition = 0;
+
+  // 現在の再生位置を外部から取得（FIX-026）
+  int get currentPosition => _currentPosition;
   late final Future<void> _initFuture;
 
   // 停止後の再開用に最後の再生パラメータを保持
@@ -51,19 +54,6 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
 
       await _tts.setLanguage('ja-JP');
 
-      // setProgressHandlerで実際の読み上げ位置をリアルタイム取得（FIX-019）
-      _tts.setProgressHandler((text, startOffset, endOffset, word) {
-        if (_isStopped || _isPaused) return;
-        if (_currentChunkIndex >= _chunks.length) return;
-        final chunkStart = _chunks[_currentChunkIndex].startPosition;
-        final absolutePosition = chunkStart + startOffset;
-        _currentPosition = absolutePosition;
-        customState.add(TtsPlaybackPosition(
-          charPosition: _currentPosition,
-          isPlaying: true,
-          ttsStatus: TtsStatus.playing,
-        ));
-      });
 
       _tts.setCompletionHandler(() async {
         try {
@@ -122,8 +112,19 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       ttsStatus: TtsStatus.playing,
     ));
 
-    // setProgressHandlerで位置更新するためタイマー不要（FIX-019）
+    // チャンクごとにsetProgressHandlerを設定（indexをクロージャでキャプチャしてズレを防止）
     _positionTimer?.cancel();
+    _tts.setProgressHandler((text, startOffset, endOffset, word) {
+      if (_isStopped || _isPaused) return;
+      final chunkStart = chunk.startPosition;
+      final absolutePosition = chunkStart + startOffset;
+      _currentPosition = absolutePosition;
+      customState.add(TtsPlaybackPosition(
+        charPosition: _currentPosition,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+    });
 
     await _tts.speak(chunk.text);
   }
@@ -330,6 +331,13 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
         gender: 'neutral',
       );
     }).toList();
+  }
+
+  // タスクリストからスワイプで削除された時に通知を消す（FIX-022）
+  @override
+  Future<void> onTaskRemoved() async {
+    await stop();
+    await super.onTaskRemoved();
   }
 
   // シングルトンのためdispose()は何もしない

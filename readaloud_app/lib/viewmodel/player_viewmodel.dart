@@ -4,6 +4,7 @@ import '../model/content.dart';
 import '../model/playback_state.dart';
 import '../model/bookmark.dart';
 import '../repository/playback_repository.dart';
+import '../repository/bookmark_repository.dart';
 import '../repository/settings_repository.dart';
 import '../model/setting.dart';
 import '../model/tts_playback_position.dart';
@@ -76,6 +77,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final TtsAudioHandler _audioHandler;
   final PlaybackRepository _playbackRepo;
   final SettingsRepository _settingsRepo;
+  final BookmarkRepository _bookmarkRepo;
 
   StreamSubscription<dynamic>? _playbackStateSubscription;
 
@@ -90,6 +92,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required TtsAudioHandler audioHandler,
     required PlaybackRepository playbackRepo,
     required SettingsRepository settingsRepo,
+    required BookmarkRepository bookmarkRepo,
   })  : _startPlayback = startPlayback,
         _stopPlayback = stopPlayback,
         _savePlaybackState = savePlaybackState,
@@ -100,6 +103,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _audioHandler = audioHandler,
         _playbackRepo = playbackRepo,
         _settingsRepo = settingsRepo,
+        _bookmarkRepo = bookmarkRepo,
         super(PlayerState()) {
     _listenToStreams();
   }
@@ -144,10 +148,13 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         // 初回はDBに保存して設定速度を永続化
         await _playbackRepo.save(playbackState);
       }
+      // DBからブックマークを読み込む（FIX-025）
+      final bookmarks = await _bookmarkRepo.getByContentId(content.id);
       state = state.copyWith(
         content: content,
         playbackState: playbackState,
         highlightPosition: playbackState.position,
+        bookmarks: bookmarks,
         isLoading: false,
       );
     } catch (e) {
@@ -170,18 +177,20 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
 
   Future<void> pause() async {
     if (state.content == null) return;
+    // _audioHandler.currentPositionで精度の高い位置を取得（FIX-026）
     await _stopPlayback.pause(
       state.content!.id,
-      state.highlightPosition,
+      _audioHandler.currentPosition,
     );
     state = state.copyWith(isPlaying: false);
   }
 
   Future<void> stop() async {
     if (state.content == null) return;
+    // _audioHandler.currentPositionで精度の高い位置を取得（FIX-026）
     await _stopPlayback.execute(
       state.content!.id,
-      state.highlightPosition,
+      _audioHandler.currentPosition,
     );
     state = state.copyWith(isPlaying: false);
   }
@@ -342,14 +351,15 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     state = state.copyWith(isLoading: true);
     try {
       if (wasPlaying) {
+        // _audioHandler.currentPositionで精度の高い位置を取得（FIX-026）
         await _stopPlayback.execute(
           state.content!.id,
-          state.highlightPosition,
+          _audioHandler.currentPosition,
         );
       }
       await _savePlaybackState.execute(
         contentId: state.content!.id,
-        position: state.highlightPosition,
+        position: _audioHandler.currentPosition,
         progressPct: state.playbackState?.progressPct ?? 0.0,
         speed: speed,
       );
@@ -449,9 +459,22 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
 
   Future<void> seekToBookmark(int position) async {
     if (state.content == null || state.content!.body.isEmpty) return;
+    final wasPlaying = state.isPlaying;
+    // 再生中の場合は正しく停止（TTS使用量カウント含む）（FIX-003）
+    if (wasPlaying) {
+      await _stopPlayback.execute(
+        state.content!.id,
+        _audioHandler.currentPosition,
+      );
+      state = state.copyWith(isPlaying: false);
+    }
     final progressPct =
         (position / state.content!.body.length * 100).clamp(0.0, 100.0);
     await seekTo(progressPct);
+    // 再生中だった場合は指定位置から再生を再開
+    if (wasPlaying) {
+      await play();
+    }
   }
 
   Future<void> seekTo(double progressPct) async {

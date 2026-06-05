@@ -64,6 +64,7 @@ final playerViewModelProvider =
     setAbRepeat: SetAbRepeatUseCase(playbackRepo),
     addBookmark: AddBookmarkUseCase(bookmarkRepo),
     deleteBookmark: DeleteBookmarkUseCase(bookmarkRepo),
+    bookmarkRepo: bookmarkRepo,
     checkTtsLimit: checkTtsLimit,
     audioHandler: audioHandler,
     playbackRepo: playbackRepo,
@@ -228,7 +229,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: BookmarkPanel(
                 bookmarks: state.bookmarks,
-                onAdd: () => _showAddBookmarkDialog(context, vm),
+                onAdd: () => _showAddBookmarkDialog(context, vm, state),
                 onDelete: (id) => vm.deleteBookmark(id),
                 onJump: (position) => vm.seekToBookmark(position),
               ),
@@ -261,8 +262,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Future<void> _showAddBookmarkDialog(
     BuildContext context,
     PlayerViewModel vm,
+    PlayerState state,
   ) async {
-    final controller = TextEditingController();
+    // 現在の再生時間を初期値として設定（REQ-018）
+    final totalChars = state.content?.body.length ?? 0;
+    final speed = (state.playbackState?.speed ?? 1.0).clamp(0.1, 10.0);
+    final progressPct = state.playbackState?.progressPct ?? 0.0;
+    final totalSecs = totalChars / (5.0 * speed);
+    final currentSecs = (totalSecs * progressPct / 100).round();
+    final minutes = currentSecs ~/ 60;
+    final seconds = currentSecs % 60;
+    final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
+    final controller = TextEditingController(text: timeLabel);
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
