@@ -96,7 +96,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final state = ref.watch(contentListViewModelProvider);
     final vm = ref.read(contentListViewModelProvider.notifier);
 
-    return Scaffold(
+    return PopScope(
+      canPop: !_isSelectMode,
+      onPopInvoked: (didPop) {
+        if (!didPop && _isSelectMode) {
+          _exitSelectMode();
+        }
+      },
+      child: Scaffold(
       body: SafeArea(
         child: Column(
           children: [
@@ -239,6 +246,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               backgroundColor: const Color(0xFF7C5CBF),
               child: const Text('+', style: TextStyle(fontSize: 24, color: Colors.white)),
             ),
+    ),
     );
   }
 

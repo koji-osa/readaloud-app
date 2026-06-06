@@ -9,6 +9,7 @@ import '../../repository/impl/content_repository_impl.dart';
 import '../../model/content.dart';
 import '../player/player_screen.dart';
 import '../home/home_screen.dart';
+import '../../util/text_cleaner.dart';
 
 final addContentViewModelProvider =
     StateNotifierProvider.autoDispose<AddContentViewModel, AddContentState>(
@@ -168,7 +169,7 @@ class _AddScreenState extends ConsumerState<AddScreen>
 }
 
 // テキスト入力タブ
-class _TextTab extends StatelessWidget {
+class _TextTab extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onPaste;
   final VoidCallback onStart;
@@ -180,6 +181,13 @@ class _TextTab extends StatelessWidget {
     required this.onStart,
     required this.isLoading,
   });
+
+  @override
+  State<_TextTab> createState() => _TextTabState();
+}
+
+class _TextTabState extends State<_TextTab> {
+  bool _shouldClean = true; // デフォルトON（REQ-008）
 
   @override
   Widget build(BuildContext context) {
@@ -196,7 +204,7 @@ class _TextTab extends StatelessWidget {
                 border: Border.all(color: const Color(0xFF3A3A55)),
               ),
               child: TextField(
-                controller: controller,
+                controller: widget.controller,
                 maxLines: null,
                 expands: true,
                 decoration: const InputDecoration(
@@ -217,7 +225,7 @@ class _TextTab extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: onPaste,
+              onPressed: widget.onPaste,
               icon: const Icon(Icons.content_paste, size: 18),
               label: const Text('クリップボードから貼り付け'),
               style: OutlinedButton.styleFrom(
@@ -252,8 +260,35 @@ class _TextTab extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 12),
-          _StartButton(onPressed: onStart, isLoading: isLoading),
+          const SizedBox(height: 4),
+          // REQ-008: URLや長い英数字・記号を省略するチェックボックス
+          Row(
+            children: [
+              Checkbox(
+                value: _shouldClean,
+                onChanged: (v) => setState(() => _shouldClean = v ?? true),
+                activeColor: const Color(0xFF7C5CBF),
+                side: const BorderSide(color: Color(0xFF3A3A55)),
+              ),
+              const Expanded(
+                child: Text(
+                  'URLや長い英数字・記号を省略する',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _StartButton(
+            onPressed: () {
+              if (_shouldClean) {
+                widget.controller.text =
+                    TextCleaner.clean(widget.controller.text);
+              }
+              widget.onStart();
+            },
+            isLoading: widget.isLoading,
+          ),
         ],
       ),
     );

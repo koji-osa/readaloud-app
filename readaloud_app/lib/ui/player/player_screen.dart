@@ -256,7 +256,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final minutes = currentSecs ~/ 60;
     final seconds = currentSecs % 60;
     final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
-    final controller = TextEditingController(text: timeLabel);
+    final now = DateTime.now();
+    final dateLabel = '${now.month}/${now.day} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final controller = TextEditingController(text: '$timeLabel $dateLabel');
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
