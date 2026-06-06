@@ -253,6 +253,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
+  String _geminiErrorMessage(dynamic e) {
+    final msg = e.toString();
+    if (msg.contains('503')) return 'サーバーが混雑しています。しばらく待ってから再度お試しください。';
+    if (msg.contains('401') || msg.contains('403')) return 'APIキーが無効です。設定画面で確認してください。';
+    if (msg.contains('timeout')) return '通信がタイムアウトしました。再度お試しください。';
+    return '分析に失敗しました。再度お試しください。';
+  }
+
   Future<void> _showAnalyzeDialog(
     BuildContext context,
     PlayerViewModel vm,
@@ -281,8 +289,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         builder: (context, setState) => AlertDialog(
           backgroundColor: const Color(0xFF2A2A3E),
           title: const Text(
-            '⚠️ Gemini API利用について',
-            style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 15),
+            'AI目次作成 - Gemini API利用について',
+            style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -366,7 +374,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('分析に失敗しました: $e'),
+            content: Text(_geminiErrorMessage(e)),
             backgroundColor: Colors.redAccent,
           ),
         );

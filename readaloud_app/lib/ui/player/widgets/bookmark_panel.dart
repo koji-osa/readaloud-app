@@ -51,7 +51,7 @@ class _BookmarkPanelState extends State<BookmarkPanel> {
               ),
               const SizedBox(width: 6),
               Text(
-                '(\${widget.bookmarks.length})',
+                '(${widget.bookmarks.length})',
                 style: const TextStyle(
                   fontSize: 10,
                   color: Color(0xFF8888AA),
@@ -73,8 +73,15 @@ class _BookmarkPanelState extends State<BookmarkPanel> {
                 GestureDetector(
                   onTap: widget.onAnalyze,
                   child: const Padding(
-                    padding: EdgeInsets.all(8),
-                    child: Text('🤖', style: TextStyle(fontSize: 16)),
+                    padding: EdgeInsets.all(4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('🤖', style: TextStyle(fontSize: 14)),
+                        SizedBox(width: 2),
+                        Text('AI目次', style: TextStyle(fontSize: 10, color: Color(0xFF9B6FE0))),
+                      ],
+                    ),
                   ),
                 ),
               // 追加ボタン（常に表示・タップ領域を広く）

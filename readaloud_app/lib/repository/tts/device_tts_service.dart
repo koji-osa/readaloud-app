@@ -19,6 +19,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   int _currentChunkIndex = 0;
   bool _isStopped = false;
   bool _isPaused = false;
+  bool _isResuming = false; // 一時停止からの再開直後フラグ（FIX-021）
   int _currentPosition = 0;
 
   // 現在の再生位置を外部から取得（FIX-026）
@@ -106,7 +107,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   Future<void> _playChunk(int index) async {
     if (index >= _chunks.length) return;
     final chunk = _chunks[index];
-    _currentPosition = chunk.startPosition;
+    // 新チャンク開始時は_currentPositionをリセット（再開時は維持）（FIX-021）
+    if (!_isResuming) {
+      _currentPosition = chunk.startPosition;
+    }
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,
       isPlaying: true,
@@ -118,11 +122,18 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _tts.setProgressHandler((text, startOffset, endOffset, word) {
       if (_isStopped || _isPaused) return;
       final chunkStart = chunk.startPosition;
-      final absolutePosition = chunkStart + startOffset;
-      _currentPosition = absolutePosition;
+      int absolutePosition;
+      if (_isResuming && startOffset == 0) {
+        // 再開直後のstartOffset=0は切り詰め後のリセットのため_currentPositionを維持（FIX-021）
+        absolutePosition = _currentPosition;
+      } else {
+        _isResuming = false; // 2回目以降は通常計算に戻す
+        absolutePosition = chunkStart + startOffset;
+        _currentPosition = absolutePosition;
+      }
       // FIX-021調査用ログ
       DebugLogger.instance.bufferProgress(
-        'PROGRESS: chunkIndex=$index chunkStart=$chunkStart startOffset=$startOffset absolute=$absolutePosition word=$word',
+        'PROGRESS: chunkIndex=$index chunkStart=$chunkStart startOffset=$startOffset absolute=$absolutePosition isResuming=$_isResuming word=$word',
       );
       customState.add(TtsPlaybackPosition(
         charPosition: _currentPosition,
@@ -210,6 +221,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     // 前回の再生を確実に停止（フラグを先にtrueにして誤発火防止）
     _isStopped = true;
     _isPaused = false;
+    _isResuming = false; // FIX-021
     await _tts.stop();
     await Future.delayed(const Duration(milliseconds: 100));
     _isStopped = false;
@@ -260,6 +272,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     if (_isPaused && !_isStopped && _chunks.isNotEmpty) {
       // 一時停止からの再開
       _isPaused = false;
+      _isResuming = true; // 再開直後フラグをセット（FIX-021）
       // FIX-021調査用ログ
       final chunkStart = _chunks.isNotEmpty ? _chunks[_currentChunkIndex].startPosition : 0;
       await DebugLogger.instance.onResume(_currentPosition, _currentChunkIndex, chunkStart);
@@ -312,6 +325,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _lastStoppedPosition = _currentPosition;
     _positionTimer?.cancel();
     _isStopped = true;
+    _isResuming = false; // FIX-021
     _chunks = [];
     await _tts.stop();
     customState.add(TtsPlaybackPosition(

@@ -67,16 +67,12 @@ class GeminiService {
       int position = item['position'] as int;
       final excerpt = item['excerpt']?.toString() ?? '';
 
-      // position補正：excerptを実際のテキストから検索
-      if (excerpt.isNotEmpty) {
-        final searchStart = (position - 50).clamp(0, text.length);
-        final searchEnd = (position + 100).clamp(0, text.length);
-        final searchRange = text.substring(searchStart, searchEnd);
-        final found = searchRange.indexOf(excerpt);
-        if (found >= 0) {
-          position = searchStart + found;
-        }
-      }
+      // excerptをテキスト全体から検索（FIX-036）
+      // 見つからない場合は登録しない
+      if (excerpt.isEmpty) continue;
+      final globalFound = text.indexOf(excerpt);
+      if (globalFound < 0) continue;
+      position = globalFound;
 
       // ブックマーク名: [目次] 分:秒 抜粋テキスト
       final totalSecs = safeTotalChars / (5.0 * safeSpeed);
