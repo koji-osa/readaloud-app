@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 class HighlightText extends StatefulWidget {
   final String text;
   final int highlightPosition;
+  final Function(int)? onTap; // REQ-001: タップで再生位置変更
 
   const HighlightText({
     super.key,
     required this.text,
     required this.highlightPosition,
+    this.onTap,
   });
 
   @override
@@ -16,6 +19,7 @@ class HighlightText extends StatefulWidget {
 
 class _HighlightTextState extends State<HighlightText> {
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey _richTextKey = GlobalKey(); // REQ-001
 
   @override
   void didUpdateWidget(HighlightText oldWidget) {
@@ -31,12 +35,10 @@ class _HighlightTextState extends State<HighlightText> {
 
     final ratio = widget.highlightPosition / widget.text.length;
     final maxScroll = _scrollController.position.maxScrollExtent;
-    // ハイライト位置が画面の上から30%に来るよう調整（FIX-020）
     final viewportHeight = _scrollController.position.viewportDimension;
     final targetScroll = (maxScroll * ratio - viewportHeight * 0.3)
         .clamp(0.0, maxScroll);
 
-    // 現在のスクロール位置から大きくずれている場合のみスクロール
     final currentScroll = _scrollController.offset;
     if ((targetScroll - currentScroll).abs() > 50) {
       _scrollController.animateTo(
@@ -45,6 +47,26 @@ class _HighlightTextState extends State<HighlightText> {
         curve: Curves.easeOut,
       );
     }
+  }
+
+  // REQ-001: タップ位置から文字インデックスを取得
+  void _handleTap(TapUpDetails details) {
+    if (widget.onTap == null) return;
+    final renderObject = _richTextKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderParagraph) return;
+
+    // タップのローカル座標にスクロール量を加算して補正
+    // GestureDetectorはContainer内側にあるためpaddingの補正は不要
+    final scrollOffset = _scrollController.hasClients
+        ? _scrollController.offset
+        : 0.0;
+    final localOffset = Offset(
+      details.localPosition.dx,
+      details.localPosition.dy + scrollOffset,
+    );
+
+    final textPosition = renderObject.getPositionForOffset(localOffset);
+    widget.onTap!(textPosition.offset);
   }
 
   @override
@@ -62,11 +84,15 @@ class _HighlightTextState extends State<HighlightText> {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFF3A3A55)),
       ),
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        child: RichText(
-          text: TextSpan(
-            children: _buildTextSpans(),
+      child: GestureDetector(
+        onTapUp: widget.onTap != null ? _handleTap : null,
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          child: RichText(
+            key: _richTextKey,
+            text: TextSpan(
+              children: _buildTextSpans(),
+            ),
           ),
         ),
       ),
@@ -93,7 +119,6 @@ class _HighlightTextState extends State<HighlightText> {
     );
 
     if (pos == 0) {
-      // 再生開始時は最初の一文をハイライト表示
       final firstSentenceEnd = _findSentenceEnd(widget.text, 0);
       return [
         TextSpan(

@@ -184,59 +184,71 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   ],
                 ),
               ),
-            // テキスト表示（ハイライト付き）
-            Expanded(
+            // テキスト表示（ハイライト付き・高さ固定）
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.40,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: HighlightText(
                   text: widget.content.body,
                   highlightPosition: state.highlightPosition,
+                  onTap: (position) => vm.seekToBookmark(position), // REQ-001
                 ),
               ),
             ),
-            // シークバー
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: SeekBar(
-                progress: state.playbackState?.progressPct ?? 0.0,
-                totalChars: widget.content.body.length,
-                speed: state.playbackState?.speed ?? 1.0,
-                onChanged: (value) async {
-                  await vm.pause();
-                  await vm.seekTo(value);
-                },
+            // シークバー（ローディング完了後に正しい位置で表示・FIX-033）
+            if (!state.isLoading)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: SeekBar(
+                  progress: state.playbackState?.progressPct ?? 0.0,
+                  totalChars: widget.content.body.length,
+                  speed: state.playbackState?.speed ?? 1.0,
+                  onChanged: (value) async {
+                    await vm.pause();
+                    await vm.seekTo(value);
+                  },
+                ),
               ),
-            ),
-            // ブックマークパネル
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: BookmarkPanel(
-                bookmarks: state.bookmarks,
-                onAdd: () => _showAddBookmarkDialog(context, vm, state),
-                onDelete: (id) => vm.deleteBookmark(id),
-                onJump: (position) => vm.seekToBookmark(position),
-              ),
-            ),
-            // 再生コントロール
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: PlaybackControls(
-                isPlaying: state.isPlaying,
-                speed: state.playbackState?.speed ?? 1.0,
-                voiceId: state.playbackState?.voiceId,
-                availableVoices: _availableVoices,
-                onPlay: vm.play,
-                onPause: vm.pause,
-                onStop: vm.stop,
-                onSeekToStart: vm.seekToStart,
-                onSeekToEnd: vm.seekToEnd,
-                onRewind: vm.rewind,
-                onFastForward: vm.fastForward,
-                onSpeedChange: vm.changeSpeed,
-                onVoiceChange: vm.changeVoice,
+            // ブックマークパネル（スクロール可能エリア）
+            Expanded(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: BookmarkPanel(
+                    bookmarks: state.bookmarks,
+                    onAdd: () => _showAddBookmarkDialog(context, vm, state),
+                    onDelete: (id) => vm.deleteBookmark(id),
+                    onJump: (position) => vm.seekToBookmark(position),
+                  ),
+                ),
               ),
             ),
           ],
+        ),
+      ),
+      // 再生コントロール（常に画面下部に固定）
+      bottomNavigationBar: Container(
+        color: const Color(0xFF0C0C18),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: PlaybackControls(
+              isPlaying: state.isPlaying,
+              speed: state.playbackState?.speed ?? 1.0,
+              voiceId: state.playbackState?.voiceId,
+              availableVoices: _availableVoices,
+              onPlay: vm.play,
+              onPause: vm.pause,
+              onStop: vm.stop,
+              onSeekToStart: vm.seekToStart,
+              onSeekToEnd: vm.seekToEnd,
+              onRewind: vm.rewind,
+              onFastForward: vm.fastForward,
+              onSpeedChange: vm.changeSpeed,
+              onVoiceChange: vm.changeVoice,
+            ),
+          ),
         ),
       ),
     );

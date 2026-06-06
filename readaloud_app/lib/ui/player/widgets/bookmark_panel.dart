@@ -66,13 +66,14 @@ class _BookmarkPanelState extends State<BookmarkPanel> {
                 ),
               ),
               const SizedBox(width: 8),
-              // 追加ボタン（常に表示）
+              // 追加ボタン（常に表示・タップ領域を広く）
               GestureDetector(
                 onTap: widget.onAdd,
-                child: const Text(
-                  '＋',
-                  style: TextStyle(
-                    fontSize: 18,
+                child: const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Icon(
+                    Icons.add,
+                    size: 22,
                     color: Color(0xFF9B6FE0),
                   ),
                 ),
