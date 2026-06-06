@@ -6,6 +6,7 @@ class BookmarkPanel extends StatefulWidget {
   final VoidCallback onAdd;
   final Function(String) onDelete;
   final Function(int) onJump;
+  final VoidCallback? onAnalyze; // REQ-011
 
   const BookmarkPanel({
     super.key,
@@ -13,6 +14,7 @@ class BookmarkPanel extends StatefulWidget {
     required this.onAdd,
     required this.onDelete,
     required this.onJump,
+    this.onAnalyze,
   });
 
   @override
@@ -65,7 +67,16 @@ class _BookmarkPanelState extends State<BookmarkPanel> {
                   color: const Color(0xFF8888AA),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
+              // 自動分析ボタン（REQ-011）
+              if (widget.onAnalyze != null)
+                GestureDetector(
+                  onTap: widget.onAnalyze,
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text('🤖', style: TextStyle(fontSize: 16)),
+                  ),
+                ),
               // 追加ボタン（常に表示・タップ領域を広く）
               GestureDetector(
                 onTap: widget.onAdd,

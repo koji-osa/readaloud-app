@@ -142,11 +142,45 @@ class SettingsScreen extends ConsumerWidget {
             // APIキー設定
             _SectionTitle(title: 'APIキー設定'),
             _SettingCard(
-              child: _SettingRow(
-                icon: Icons.key,
-                label: 'Google Cloud TTS APIキー',
-                value: '••••••••••••',
-                onTap: () => _showApiKeyDialog(context, vm),
+              child: Column(
+                children: [
+                  _SettingRow(
+                    icon: Icons.key,
+                    label: 'Google Cloud TTS APIキー',
+                    value: '••••••••••••',
+                    onTap: () => _showApiKeyDialog(context, vm),
+                  ),
+                  const _Divider(),
+                  _SettingRow(
+                    icon: Icons.auto_awesome,
+                    label: 'Gemini APIキー',
+                    value: '••••••••••••',
+                    onTap: () => _showGeminiApiKeyDialog(context),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Gemini API警告文
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2A1A1A),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFF87171).withOpacity(0.5)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('⚠️', style: TextStyle(fontSize: 14)),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Gemini APIを使用すると、入力テキストがGoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
+                      style: TextStyle(fontSize: 11, color: Color(0xFFF87171)),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 16),
@@ -239,6 +273,48 @@ class SettingsScreen extends ConsumerWidget {
             );
           }).toList(),
         ),
+      ),
+    );
+  }
+
+  Future<void> _showGeminiApiKeyDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text('Gemini APIキーを設定',
+            style: TextStyle(color: Color(0xFFF0F0F8))),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'APIキーを入力...',
+            hintStyle: TextStyle(color: Color(0xFF44445A)),
+          ),
+          style: const TextStyle(color: Color(0xFFF0F0F8)),
+          obscureText: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('キャンセル',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (controller.text.isNotEmpty) {
+                const storage = FlutterSecureStorage();
+                await storage.write(
+                  key: SettingKeys.geminiApiKey,
+                  value: controller.text,
+                );
+              }
+              if (context.mounted) Navigator.of(context).pop();
+            },
+            child: const Text('保存',
+                style: TextStyle(color: Color(0xFF9B6FE0))),
+          ),
+        ],
       ),
     );
   }

@@ -432,6 +432,18 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     }
   }
 
+  /// Gemini分析結果のブックマークを直接追加（REQ-011）
+  Future<void> addBookmarkDirect(Bookmark bookmark) async {
+    try {
+      await _bookmarkRepo.save(bookmark);
+      state = state.copyWith(
+        bookmarks: [...state.bookmarks, bookmark],
+      );
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'ブックマークの追加に失敗しました: $e');
+    }
+  }
+
   Future<void> deleteBookmark(String bookmarkId) async {
     try {
       await _deleteBookmark.execute(bookmarkId);

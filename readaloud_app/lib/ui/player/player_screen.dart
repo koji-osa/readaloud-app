@@ -1,4 +1,7 @@
 import '../../providers.dart';
+import '../../repository/gemini_service.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../model/setting.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../model/content.dart';
@@ -220,6 +223,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     onAdd: () => _showAddBookmarkDialog(context, vm, state),
                     onDelete: (id) => vm.deleteBookmark(id),
                     onJump: (position) => vm.seekToBookmark(position),
+                    onAnalyze: () => _showAnalyzeDialog(context, vm, state), // REQ-011
                   ),
                 ),
               ),
@@ -247,6 +251,127 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _showAnalyzeDialog(
+    BuildContext context,
+    PlayerViewModel vm,
+    PlayerState state,
+  ) async {
+    if (state.content == null) return;
+
+    const storage = FlutterSecureStorage();
+    final apiKey = await storage.read(key: SettingKeys.geminiApiKey);
+    if (!context.mounted) return;
+
+    if (apiKey == null || apiKey.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('設定画面でGemini APIキーを設定してください'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    bool shouldClean = true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          backgroundColor: const Color(0xFF2A2A3E),
+          title: const Text(
+            '⚠️ Gemini API利用について',
+            style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 15),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '入力テキストがGoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
+                style: TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Checkbox(
+                    value: shouldClean,
+                    onChanged: (v) => setState(() => shouldClean = v ?? true),
+                    activeColor: const Color(0xFF7C5CBF),
+                    side: const BorderSide(color: Color(0xFF3A3A55)),
+                  ),
+                  const Expanded(
+                    child: Text(
+                      'URLや長い英数字・記号を省略して送信する',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('キャンセル',
+                  style: TextStyle(color: Color(0xFF8888AA))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('分析する',
+                  style: TextStyle(color: Color(0xFF9B6FE0))),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('🤖 テキストを分析中...'),
+        duration: Duration(seconds: 30),
+        backgroundColor: Color(0xFF7C5CBF),
+      ),
+    );
+
+    try {
+      final service = GeminiService();
+      final bookmarks = await service.analyzeAndCreateBookmarks(
+        contentId: state.content!.id,
+        text: state.content!.body,
+        apiKey: apiKey,
+        shouldClean: shouldClean,
+        speed: state.playbackState?.speed ?? 1.0,
+        totalChars: state.content!.body.length,
+      );
+
+      for (final bookmark in bookmarks) {
+        await vm.addBookmarkDirect(bookmark);
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ ${bookmarks.length}件のブックマークを追加しました'),
+            backgroundColor: const Color(0xFF7C5CBF),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('分析に失敗しました: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _showAddBookmarkDialog(

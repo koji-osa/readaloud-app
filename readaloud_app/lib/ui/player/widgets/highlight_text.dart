@@ -36,7 +36,7 @@ class _HighlightTextState extends State<HighlightText> {
     final ratio = widget.highlightPosition / widget.text.length;
     final maxScroll = _scrollController.position.maxScrollExtent;
     final viewportHeight = _scrollController.position.viewportDimension;
-    final targetScroll = (maxScroll * ratio - viewportHeight * 0.3)
+    final targetScroll = (maxScroll * ratio - viewportHeight * 0.5)
         .clamp(0.0, maxScroll);
 
     final currentScroll = _scrollController.offset;
@@ -78,7 +78,7 @@ class _HighlightTextState extends State<HighlightText> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(30, 16, 16, 16),
       decoration: BoxDecoration(
         color: const Color(0xFF2A2A3E),
         borderRadius: BorderRadius.circular(16),

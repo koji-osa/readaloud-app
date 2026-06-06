@@ -46,4 +46,5 @@ class SettingKeys {
   static const String cloudSyncEnabled     = 'cloud_sync_enabled';
   static const String onboardingCompleted  = 'onboarding_completed';
   static const String sortOrder            = 'sort_order';
+  static const String geminiApiKey         = 'gemini_api_key';
 }
