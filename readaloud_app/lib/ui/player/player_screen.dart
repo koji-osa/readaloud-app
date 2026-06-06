@@ -214,7 +214,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             Expanded(
               child: SingleChildScrollView(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   child: BookmarkPanel(
                     bookmarks: state.bookmarks,
                     onAdd: () => _showAddBookmarkDialog(context, vm, state),
@@ -224,31 +224,26 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ),
               ),
             ),
-          ],
-        ),
-      ),
-      // 再生コントロール（常に画面下部に固定）
-      bottomNavigationBar: Container(
-        color: const Color(0xFF0C0C18),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: PlaybackControls(
-              isPlaying: state.isPlaying,
-              speed: state.playbackState?.speed ?? 1.0,
-              voiceId: state.playbackState?.voiceId,
-              availableVoices: _availableVoices,
-              onPlay: vm.play,
-              onPause: vm.pause,
-              onStop: vm.stop,
-              onSeekToStart: vm.seekToStart,
-              onSeekToEnd: vm.seekToEnd,
-              onRewind: vm.rewind,
-              onFastForward: vm.fastForward,
-              onSpeedChange: vm.changeSpeed,
-              onVoiceChange: vm.changeVoice,
+            // 再生コントロール（常に表示・固定）
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: PlaybackControls(
+                isPlaying: state.isPlaying,
+                speed: state.playbackState?.speed ?? 1.0,
+                voiceId: state.playbackState?.voiceId,
+                availableVoices: _availableVoices,
+                onPlay: vm.play,
+                onPause: vm.pause,
+                onStop: vm.stop,
+                onSeekToStart: vm.seekToStart,
+                onSeekToEnd: vm.seekToEnd,
+                onRewind: vm.rewind,
+                onFastForward: vm.fastForward,
+                onSpeedChange: vm.changeSpeed,
+                onVoiceChange: vm.changeVoice,
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
