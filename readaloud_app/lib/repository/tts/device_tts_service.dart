@@ -3,6 +3,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import '../../model/tts_playback_position.dart';
+import '../../util/debug_logger.dart';
 import 'tts_service.dart';
 
 class _TextChunk {
@@ -119,6 +120,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       final chunkStart = chunk.startPosition;
       final absolutePosition = chunkStart + startOffset;
       _currentPosition = absolutePosition;
+      // FIX-021調査用ログ
+      DebugLogger.instance.bufferProgress(
+        'PROGRESS: chunkIndex=$index chunkStart=$chunkStart startOffset=$startOffset absolute=$absolutePosition word=$word',
+      );
       customState.add(TtsPlaybackPosition(
         charPosition: _currentPosition,
         isPlaying: true,
@@ -255,6 +260,9 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     if (_isPaused && !_isStopped && _chunks.isNotEmpty) {
       // 一時停止からの再開
       _isPaused = false;
+      // FIX-021調査用ログ
+      final chunkStart = _chunks.isNotEmpty ? _chunks[_currentChunkIndex].startPosition : 0;
+      await DebugLogger.instance.onResume(_currentPosition, _currentChunkIndex, chunkStart);
       customState.add(TtsPlaybackPosition(
         charPosition: _currentPosition,
         isPlaying: true,
@@ -283,6 +291,8 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     await _initFuture;
     _positionTimer?.cancel();
     _isPaused = true;
+    // FIX-021調査用ログ
+    await DebugLogger.instance.onPause(_currentPosition, _currentChunkIndex);
     await _tts.pause();
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,

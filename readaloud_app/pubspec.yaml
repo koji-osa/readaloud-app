@@ -1,7 +1,7 @@
 name: readaloud_app
 description: テキスト読み上げアプリ
 publish_to: 'none'
-version: 1.1.7+17
+version: 1.1.8+18
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -14,6 +14,7 @@ dependencies:
   # ローカルDB
   sqflite: ^2.3.3
   path: ^1.9.0
+  path_provider: ^2.1.5
   # APIキー暗号化保存
   flutter_secure_storage: ^9.2.2
   # TTS（内蔵）

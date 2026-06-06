@@ -10,6 +10,7 @@ import 'repository/tts/device_tts_service.dart';
 import 'providers.dart';
 import 'model/setting.dart';
 import 'util/share_intent_handler.dart';
+import 'util/debug_logger.dart';
 
 
 void main() async {
@@ -22,12 +23,15 @@ void main() async {
       androidNotificationChannelId: 'com.example.readaloud_app.audio',
       androidNotificationChannelName: 'ReadAloud',
       androidNotificationOngoing: false,
-      androidStopForegroundOnPause: true,
+      androidStopForegroundOnPause: false,
     ),
   );
 
 
   await AudioService.androidForceEnableMediaButtons();
+
+  // FIX-021調査用ログ初期化
+  await DebugLogger.instance.init(appVersion: '1.1.8+18');
 
   runApp(
     ProviderScope(

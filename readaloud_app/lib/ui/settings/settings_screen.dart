@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../viewmodel/settings_viewmodel.dart';
 import '../../model/setting.dart';
 import '../home/widgets/tts_usage_banner.dart';
+import '../../util/debug_logger.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -168,6 +169,13 @@ class SettingsScreen extends ConsumerWidget {
                     value: '',
                     onTap: () {},
                   ),
+                  const _Divider(),
+                  _SettingRow(
+                    icon: Icons.bug_report,
+                    label: 'FIX-021ログをダウンロード',
+                    value: '',
+                    onTap: () => _downloadDebugLog(context),
+                  ),
                 ],
               ),
             ),
@@ -176,6 +184,26 @@ class SettingsScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _downloadDebugLog(BuildContext context) async {
+    final path = await DebugLogger.instance.copyToDownloads();
+    if (!context.mounted) return;
+    if (path != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('ダウンロードフォルダに保存しました'),
+          backgroundColor: const Color(0xFF7C5CBF),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('保存に失敗しました'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Future<void> _showSpeedDialog(

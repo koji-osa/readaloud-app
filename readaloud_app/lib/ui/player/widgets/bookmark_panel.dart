@@ -62,28 +62,31 @@ class BookmarkPanel extends StatelessWidget {
             ...bookmarks.map(
               (b) => Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Row(
-                  children: [
-                    const Text('🔖', style: TextStyle(fontSize: 14)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        b.label ?? '位置 ${b.position}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFFF0F0F8),
+                child: GestureDetector(
+                  onTap: () => onJump(b.position),
+                  child: Row(
+                    children: [
+                      const Text('🔖', style: TextStyle(fontSize: 14)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          b.label ?? '位置 ${b.position}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFFF0F0F8),
+                          ),
                         ),
                       ),
-                    ),
-                    GestureDetector(
-                      onTap: () => onDelete(b.id),
-                      child: const Icon(
-                        Icons.close,
-                        size: 16,
-                        color: Color(0xFF44445A),
+                      GestureDetector(
+                        onTap: () => onDelete(b.id),
+                        child: const Icon(
+                          Icons.close,
+                          size: 16,
+                          color: Color(0xFF44445A),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
