@@ -46,7 +46,7 @@ class PlaybackControls extends StatelessWidget {
           // 速度ボタン
           Row(
             mainAxisAlignment: MainAxisAlignment.start,
-            children: [0.75, 1.0, 1.5, 2.0, 2.5].map((s) {
+            children: [0.75, 1.0, 1.5, 1.75, 2.0, 2.5].map((s) {
               final isSelected = (speed - s).abs() < 0.01;
               return Padding(
                 padding: const EdgeInsets.only(right: 6),

@@ -183,7 +183,7 @@ class SettingsScreen extends ConsumerWidget {
     SettingsViewModel vm,
     SettingsState state,
   ) async {
-    final speeds = ['0.75', '1.0', '1.5', '2.0', '2.5'];
+    final speeds = ['0.75', '1.0', '1.5', '1.75', '2.0', '2.5'];
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(

@@ -24,11 +24,75 @@ final contentListViewModelProvider =
   );
 });
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  bool _isSelectMode = false;
+  final Set<String> _selectedIds = {};
+
+  void _enterSelectMode(String id) {
+    setState(() {
+      _isSelectMode = true;
+      _selectedIds.add(id);
+    });
+  }
+
+  void _toggleSelect(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _isSelectMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  Future<void> _deleteSelected(BuildContext context) async {
+    final count = _selectedIds.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text('一括削除', style: TextStyle(color: Color(0xFFF0F0F8))),
+        content: Text(
+          '$count件のテキストを削除しますか？',
+          style: const TextStyle(color: Color(0xFF8888AA)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('キャンセル', style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('削除', style: TextStyle(color: Color(0xFFF87171))),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      for (final id in _selectedIds.toList()) {
+        if (!mounted) break;
+        await ref.read(contentListViewModelProvider.notifier).deleteContent(id);
+      }
+      if (mounted) _exitSelectMode();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(contentListViewModelProvider);
     final vm = ref.read(contentListViewModelProvider.notifier);
 
@@ -123,12 +187,19 @@ class HomeScreen extends ConsumerWidget {
                             final content = state.contents[index];
                             return ContentCard(
                               content: content,
-                              onTap: () => _openPlayer(context, ref, content),
+                              onTap: () => _isSelectMode
+                                  ? _toggleSelect(content.id)
+                                  : _openPlayer(context, ref, content),
                               onDelete: () =>
                                   _confirmDelete(context, ref, content),
-                              onEditTitle: (newTitle) =>
-                                  vm.updateTitle(content.id, newTitle),
+                              onEditTitle: (currentTitle) =>
+                                  _showEditTitleDialog(context, ref, content.id, currentTitle),
                               progressPct: state.progressMap[content.id] ?? 0.0,
+                              isSelectMode: _isSelectMode,
+                              isSelected: _selectedIds.contains(content.id),
+                              onLongPress: () => _isSelectMode
+                                  ? _toggleSelect(content.id)
+                                  : _enterSelectMode(content.id),
                             );
                           },
                         ),
@@ -136,18 +207,72 @@ class HomeScreen extends ConsumerWidget {
           ],
         ),
       ),
-      // FABボタン
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          await Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const AddScreen()),
-          );
-          ref.read(contentListViewModelProvider.notifier).loadContents();
-        },
-        backgroundColor: const Color(0xFF7C5CBF),
-        child: const Text('+', style: TextStyle(fontSize: 24, color: Colors.white)),
+      floatingActionButton: _isSelectMode
+          ? Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                FloatingActionButton.extended(
+                  heroTag: 'cancel',
+                  onPressed: _exitSelectMode,
+                  backgroundColor: const Color(0xFF323248),
+                  label: const Text('キャンセル', style: TextStyle(color: Color(0xFFF0F0F8))),
+                ),
+                const SizedBox(width: 12),
+                FloatingActionButton.extended(
+                  heroTag: 'delete',
+                  onPressed: _selectedIds.isEmpty ? null : () => _deleteSelected(context),
+                  backgroundColor: _selectedIds.isEmpty ? const Color(0xFF323248) : const Color(0xFFF87171),
+                  label: Text(
+                    '削除 (${_selectedIds.length})',
+                    style: const TextStyle(color: Color(0xFFF0F0F8)),
+                  ),
+                ),
+              ],
+            )
+          : FloatingActionButton(
+              onPressed: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const AddScreen()),
+                );
+                ref.read(contentListViewModelProvider.notifier).loadContents();
+              },
+              backgroundColor: const Color(0xFF7C5CBF),
+              child: const Text('+', style: TextStyle(fontSize: 24, color: Colors.white)),
+            ),
+    );
+  }
+
+  Future<void> _showEditTitleDialog(BuildContext context, WidgetRef ref, String contentId, String currentTitle) async {
+    final controller = TextEditingController(text: currentTitle);
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text('タイトルを編集', style: TextStyle(color: Color(0xFFF0F0F8))),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'タイトルを入力',
+            hintStyle: TextStyle(color: Color(0xFF44445A)),
+          ),
+          style: const TextStyle(color: Color(0xFFF0F0F8)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('キャンセル', style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('保存', style: TextStyle(color: Color(0xFF9B6FE0))),
+          ),
+        ],
       ),
     );
+    if (newTitle != null && newTitle.isNotEmpty && mounted) {
+      ref.read(contentListViewModelProvider.notifier).updateTitle(contentId, newTitle);
+    }
   }
 
   Future<void> _openPlayer(BuildContext context, WidgetRef ref, Content content) async {

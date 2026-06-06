@@ -6,7 +6,10 @@ class ContentCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onDelete;
   final Function(String) onEditTitle;
-  final double progressPct; // playback_state.progressPct から渡す
+  final double progressPct;
+  final bool isSelectMode;
+  final bool isSelected;
+  final VoidCallback? onLongPress;
 
   const ContentCard({
     super.key,
@@ -15,45 +18,63 @@ class ContentCard extends StatelessWidget {
     required this.onDelete,
     required this.onEditTitle,
     this.progressPct = 0.0,
+    this.isSelectMode = false,
+    this.isSelected = false,
+    this.onLongPress,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFF2A2A3E),
+          color: isSelected ? const Color(0xFF3D2B6E) : const Color(0xFF2A2A3E),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF3A3A55)),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF9B6FE0) : const Color(0xFF3A3A55),
+          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Expanded(
-                  child: Text(
-                    content.title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFFF0F0F8),
+                if (isSelectMode)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Icon(
+                      isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
+                      color: isSelected ? const Color(0xFF9B6FE0) : const Color(0xFF44445A),
+                      size: 22,
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+                  ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: isSelectMode ? null : () => onEditTitle(content.title),
+                    child: Text(
+                      content.title,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: isSelectMode ? const Color(0xFF8888AA) : const Color(0xFFF0F0F8),
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
-                // 削除ボタン
-                IconButton(
-                  icon: const Icon(Icons.delete_outline,
-                      color: Color(0xFF44445A), size: 20),
-                  onPressed: onDelete,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
+                if (!isSelectMode)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline,
+                        color: Color(0xFF44445A), size: 20),
+                    onPressed: onDelete,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
               ],
             ),
             const SizedBox(height: 10),
