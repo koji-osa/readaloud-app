@@ -47,4 +47,6 @@ class SettingKeys {
   static const String onboardingCompleted  = 'onboarding_completed';
   static const String sortOrder            = 'sort_order';
   static const String geminiApiKey         = 'gemini_api_key';
+  static const String claudeApiKey         = 'claude_api_key';
+  static const String aiProvider           = 'ai_provider';
 }

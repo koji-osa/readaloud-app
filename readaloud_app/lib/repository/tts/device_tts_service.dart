@@ -20,6 +20,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   bool _isStopped = false;
   bool _isPaused = false;
   bool _isResuming = false; // 一時停止からの再開直後フラグ（FIX-021）
+  int _pausedPosition = 0;  // 一時停止時の位置（FIX-021）
   int _currentPosition = 0;
 
   // 現在の再生位置を外部から取得（FIX-026）
@@ -123,11 +124,14 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       if (_isStopped || _isPaused) return;
       final chunkStart = chunk.startPosition;
       int absolutePosition;
-      if (_isResuming && startOffset == 0) {
-        // 再開直後のstartOffset=0は切り詰め後のリセットのため_currentPositionを維持（FIX-021）
-        absolutePosition = _currentPosition;
+      if (_isResuming) {
+        // 再開後は_pausedPositionを基準にstartOffsetを加算（FIX-021）
+        absolutePosition = _pausedPosition + startOffset;
+        if (startOffset > 0) {
+          _isResuming = false; // startOffset>0になったら通常モードに戻る
+        }
+        _currentPosition = absolutePosition;
       } else {
-        _isResuming = false; // 2回目以降は通常計算に戻す
         absolutePosition = chunkStart + startOffset;
         _currentPosition = absolutePosition;
       }
@@ -222,6 +226,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _isStopped = true;
     _isPaused = false;
     _isResuming = false; // FIX-021
+    _pausedPosition = 0; // FIX-021
     await _tts.stop();
     await Future.delayed(const Duration(milliseconds: 100));
     _isStopped = false;
@@ -304,6 +309,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     await _initFuture;
     _positionTimer?.cancel();
     _isPaused = true;
+    _pausedPosition = _currentPosition; // 一時停止位置を保存（FIX-021）
     // FIX-021調査用ログ
     await DebugLogger.instance.onPause(_currentPosition, _currentChunkIndex);
     await _tts.pause();
@@ -326,6 +332,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _positionTimer?.cancel();
     _isStopped = true;
     _isResuming = false; // FIX-021
+    _pausedPosition = 0; // FIX-021
     _chunks = [];
     await _tts.stop();
     customState.add(TtsPlaybackPosition(

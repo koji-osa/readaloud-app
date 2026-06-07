@@ -17,6 +17,7 @@ class SettingsState {
   final String ttsUsedChars;
   final bool ttsFallbackDevice;
   final bool cloudSyncEnabled;
+  final String aiProvider; // 'gemini' or 'claude'（REQ-023）
 
   SettingsState({
     this.isLoading = false,
@@ -32,6 +33,7 @@ class SettingsState {
     this.ttsUsedChars = '0',
     this.ttsFallbackDevice = true,
     this.cloudSyncEnabled = true,
+    this.aiProvider = 'gemini',
   });
 
   SettingsState copyWith({
@@ -48,6 +50,7 @@ class SettingsState {
     String? ttsUsedChars,
     bool? ttsFallbackDevice,
     bool? cloudSyncEnabled,
+    String? aiProvider,
   }) =>
       SettingsState(
         isLoading: isLoading ?? this.isLoading,
@@ -63,6 +66,7 @@ class SettingsState {
         ttsUsedChars: ttsUsedChars ?? this.ttsUsedChars,
         ttsFallbackDevice: ttsFallbackDevice ?? this.ttsFallbackDevice,
         cloudSyncEnabled: cloudSyncEnabled ?? this.cloudSyncEnabled,
+        aiProvider: aiProvider ?? this.aiProvider,
       );
 
   // TTS使用量の割合（0.0〜1.0）
@@ -105,6 +109,7 @@ class SettingsViewModel extends StateNotifier<SettingsState> {
         ttsUsedChars: all[SettingKeys.ttsUsedChars] ?? '0',
         ttsFallbackDevice: all[SettingKeys.ttsFallbackDevice] != 'false',
         cloudSyncEnabled: all[SettingKeys.cloudSyncEnabled] != 'false',
+        aiProvider: all[SettingKeys.aiProvider] ?? 'gemini',
       );
     } catch (e) {
       state = state.copyWith(

@@ -3,11 +3,10 @@ import 'package:dio/dio.dart';
 import '../model/bookmark.dart';
 import '../util/text_cleaner.dart';
 
-/// REQ-011: Gemini API連携・テキスト自動構造分析・ブックマーク自動作成
-class GeminiService {
-  static const String _model = 'gemini-2.5-flash';
-  static const String _baseUrl =
-      'https://generativelanguage.googleapis.com/v1beta/models';
+/// REQ-023: Claude API連携・テキスト自動構造分析・ブックマーク自動作成
+class ClaudeService {
+  static const String _model = 'claude-haiku-4-5';
+  static const String _baseUrl = 'https://api.anthropic.com/v1/messages';
 
   final Dio _dio = Dio();
 
@@ -20,37 +19,34 @@ class GeminiService {
     required double speed,
     required int totalChars,
   }) async {
-    // 前処理オプション
     final sendText = shouldClean ? TextCleaner.clean(text) : text;
-
-    // プロンプト構築
     final prompt = _buildPrompt(sendText);
 
-    // Gemini API呼び出し
     final response = await _dio.post(
-      '$_baseUrl/$_model:generateContent?key=$apiKey',
+      _baseUrl,
       data: {
-        'contents': [
+        'model': _model,
+        'max_tokens': 2000,
+        'messages': [
           {
-            'parts': [
-              {'text': prompt}
-            ]
+            'role': 'user',
+            'content': prompt,
           }
         ],
-        'generationConfig': {
-          'responseMimeType': 'application/json',
-        },
       },
       options: Options(
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
         receiveTimeout: const Duration(seconds: 120),
         connectTimeout: const Duration(seconds: 30),
       ),
     );
 
     // レスポンスのパース
-    final content =
-        response.data['candidates'][0]['content']['parts'][0]['text'];
+    final content = response.data['content'][0]['text'];
     final cleaned = content
         .toString()
         .replaceAll('```json', '')
@@ -69,7 +65,6 @@ class GeminiService {
       final excerpt = item['excerpt']?.toString() ?? '';
 
       // excerptをテキスト全体から検索（FIX-036）
-      // 見つからない場合は登録しない
       if (excerpt.isEmpty) continue;
       final globalFound = text.indexOf(excerpt);
       if (globalFound < 0) continue;
@@ -84,7 +79,6 @@ class GeminiService {
       final excerptTrimmed =
           excerpt.length > 15 ? excerpt.substring(0, 15) : excerpt;
       final rawLabel = '[目次] $timeLabel $excerptTrimmed';
-      // Bookmark.maxLabelLength（50文字）以内に切り詰め
       final label = rawLabel.length > Bookmark.maxLabelLength
           ? rawLabel.substring(0, Bookmark.maxLabelLength)
           : rawLabel;

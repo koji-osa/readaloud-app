@@ -157,7 +157,25 @@ class SettingsScreen extends ConsumerWidget {
                     value: '••••••••••••',
                     onTap: () => _showGeminiApiKeyDialog(context),
                   ),
+                  const _Divider(),
+                  _SettingRow(
+                    icon: Icons.psychology,
+                    label: 'Claude APIキー',
+                    value: '••••••••••••',
+                    onTap: () => _showClaudeApiKeyDialog(context),
+                  ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            // AI目次作成API選択（REQ-023）
+            _SectionTitle(title: 'AI目次作成'),
+            _SettingCard(
+              child: _SettingRow(
+                icon: Icons.api,
+                label: '使用するAPI',
+                value: state.aiProvider == 'claude' ? 'Claude' : 'Gemini',
+                onTap: () => _showAiProviderDialog(context, vm, state.aiProvider),
               ),
             ),
             const SizedBox(height: 8),
@@ -273,6 +291,105 @@ class SettingsScreen extends ConsumerWidget {
             );
           }).toList(),
         ),
+      ),
+    );
+  }
+
+  Future<void> _showClaudeApiKeyDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text('Claude APIキーを設定',
+            style: TextStyle(color: Color(0xFFF0F0F8))),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'APIキーを入力...',
+            hintStyle: TextStyle(color: Color(0xFF44445A)),
+          ),
+          style: const TextStyle(color: Color(0xFFF0F0F8)),
+          obscureText: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('キャンセル',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (controller.text.isNotEmpty) {
+                const storage = FlutterSecureStorage();
+                await storage.write(
+                  key: SettingKeys.claudeApiKey,
+                  value: controller.text,
+                );
+              }
+              if (context.mounted) Navigator.of(context).pop();
+            },
+            child: const Text('保存',
+                style: TextStyle(color: Color(0xFF9B6FE0))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showAiProviderDialog(
+    BuildContext context,
+    SettingsViewModel vm,
+    String currentProvider,
+  ) async {
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text('AI目次作成に使用するAPI',
+            style: TextStyle(color: Color(0xFFF0F0F8))),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('Gemini',
+                  style: TextStyle(color: Color(0xFFF0F0F8))),
+              subtitle: const Text('Google（無料枠あり）',
+                  style: TextStyle(color: Color(0xFF8888AA), fontSize: 12)),
+              leading: Radio<String>(
+                value: 'gemini',
+                groupValue: currentProvider,
+                onChanged: (v) {
+                  vm.saveSetting(SettingKeys.aiProvider, v!);
+                  Navigator.of(context).pop();
+                },
+                activeColor: const Color(0xFF9B6FE0),
+              ),
+            ),
+            ListTile(
+              title: const Text('Claude',
+                  style: TextStyle(color: Color(0xFFF0F0F8))),
+              subtitle: const Text('Anthropic（従量課金）',
+                  style: TextStyle(color: Color(0xFF8888AA), fontSize: 12)),
+              leading: Radio<String>(
+                value: 'claude',
+                groupValue: currentProvider,
+                onChanged: (v) {
+                  vm.saveSetting(SettingKeys.aiProvider, v!);
+                  Navigator.of(context).pop();
+                },
+                activeColor: const Color(0xFF9B6FE0),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('キャンセル',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+        ],
       ),
     );
   }

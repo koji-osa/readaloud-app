@@ -1,5 +1,6 @@
 import '../../providers.dart';
 import '../../repository/gemini_service.dart';
+import '../../repository/claude_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../model/setting.dart';
 import 'package:flutter/material.dart';
@@ -23,6 +24,7 @@ import 'widgets/highlight_text.dart';
 import 'widgets/seek_bar.dart';
 import 'widgets/playback_controls.dart';
 import 'widgets/bookmark_panel.dart';
+import '../../model/bookmark.dart';
 
 final playerViewModelProvider =
     StateNotifierProvider.autoDispose<PlayerViewModel, PlayerState>((ref) {
@@ -268,14 +270,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   ) async {
     if (state.content == null) return;
 
+    // 前回のSnackBarが残っている場合は消す（FIX-041）
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
     const storage = FlutterSecureStorage();
-    final apiKey = await storage.read(key: SettingKeys.geminiApiKey);
+    final provider = await storage.read(key: SettingKeys.aiProvider) ?? 'gemini';
+    final apiKeySettingKey = provider == 'claude'
+        ? SettingKeys.claudeApiKey
+        : SettingKeys.geminiApiKey;
+    final apiKey = await storage.read(key: apiKeySettingKey);
     if (!context.mounted) return;
 
     if (apiKey == null || apiKey.isEmpty) {
+      final providerName = provider == 'claude' ? 'Claude' : 'Gemini';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('設定画面でGemini APIキーを設定してください'),
+        SnackBar(
+          content: Text('設定画面で$providerName APIキーを設定してください'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -288,17 +298,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           backgroundColor: const Color(0xFF2A2A3E),
-          title: const Text(
-            'AI目次作成 - Gemini API利用について',
-            style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
+          title: Text(
+            provider == 'claude'
+                ? 'AI目次作成 - Claude API利用について'
+                : 'AI目次作成 - Gemini API利用について',
+            style: const TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                '入力テキストがGoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
-                style: TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+              Text(
+                provider == 'claude'
+                    ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
+                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
               ),
               const SizedBox(height: 12),
               Row(
@@ -346,16 +360,26 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
 
     try {
-      final service = GeminiService();
-      final bookmarks = await service.analyzeAndCreateBookmarks(
-        contentId: state.content!.id,
-        text: state.content!.body,
-        apiKey: apiKey,
-        shouldClean: shouldClean,
-        speed: state.playbackState?.speed ?? 1.0,
-        totalChars: state.content!.body.length,
-      );
-
+      final List<Bookmark> bookmarks;
+      if (provider == 'claude') {
+        bookmarks = await ClaudeService().analyzeAndCreateBookmarks(
+          contentId: state.content!.id,
+          text: state.content!.body,
+          apiKey: apiKey,
+          shouldClean: shouldClean,
+          speed: state.playbackState?.speed ?? 1.0,
+          totalChars: state.content!.body.length,
+        );
+      } else {
+        bookmarks = await GeminiService().analyzeAndCreateBookmarks(
+          contentId: state.content!.id,
+          text: state.content!.body,
+          apiKey: apiKey,
+          shouldClean: shouldClean,
+          speed: state.playbackState?.speed ?? 1.0,
+          totalChars: state.content!.body.length,
+        );
+      }
       for (final bookmark in bookmarks) {
         await vm.addBookmarkDirect(bookmark);
       }
