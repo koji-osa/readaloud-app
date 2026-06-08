@@ -1,6 +1,7 @@
 import '../../providers.dart';
 import '../../repository/gemini_service.dart';
 import '../../repository/claude_service.dart';
+import '../../repository/table_analysis_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../model/setting.dart';
 import 'package:flutter/material.dart';
@@ -257,6 +258,147 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
+  Future<void> _showTableAnalysisDialog(
+    BuildContext context,
+    PlayerViewModel vm,
+    PlayerState state,
+    String aiProvider,
+  ) async {
+    if (state.content == null) return;
+
+    const storage = FlutterSecureStorage();
+    final apiKeySettingKey = aiProvider == 'claude'
+        ? SettingKeys.claudeApiKey
+        : SettingKeys.geminiApiKey;
+    final apiKey = await storage.read(key: apiKeySettingKey);
+    if (!context.mounted) return;
+
+    if (apiKey == null || apiKey.isEmpty) {
+      final providerName = aiProvider == 'claude' ? 'Claude' : 'Gemini';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('設定画面で$providerName APIキーを設定してください'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    bool shouldClean = true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          backgroundColor: const Color(0xFF2A2A3E),
+          title: Text(
+            '表の解説作成 - ${aiProvider == 'claude' ? 'Claude' : 'Gemini'} API利用について',
+            style: const TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                aiProvider == 'claude'
+                    ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
+                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Checkbox(
+                    value: shouldClean,
+                    onChanged: (v) => setState(() => shouldClean = v ?? true),
+                    activeColor: const Color(0xFF7C5CBF),
+                    side: const BorderSide(color: Color(0xFF3A3A55)),
+                  ),
+                  const Expanded(
+                    child: Text(
+                      'URLや長い英数字・記号を省略して送信する',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('キャンセル',
+                  style: TextStyle(color: Color(0xFF8888AA))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('解析する',
+                  style: TextStyle(color: Color(0xFF9B6FE0))),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('📊 表を解析中...'),
+        duration: Duration(seconds: 120),
+        backgroundColor: Color(0xFF7C5CBF),
+      ),
+    );
+
+    try {
+      final service = TableAnalysisService();
+      final result = await service.analyzeAndDescribeTables(
+        contentId: state.content!.id,
+        text: state.content!.body,
+        apiKey: apiKey,
+        provider: aiProvider,
+        shouldClean: shouldClean,
+        speed: state.playbackState?.speed ?? 1.0,
+        totalChars: state.content!.body.length,
+      );
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      if (result.noTableFound) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('表が見つかりませんでした'),
+            backgroundColor: Color(0xFF7C5CBF),
+          ),
+        );
+        return;
+      }
+
+      for (final bookmark in result.bookmarks) {
+        await vm.addBookmarkDirect(bookmark);
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ ${result.tables.length}件の表を検出・解説を追加しました'),
+            backgroundColor: const Color(0xFF7C5CBF),
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_geminiErrorMessage(e)),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
   String _geminiErrorMessage(dynamic e) {
     final msg = e.toString();
     if (msg.contains('503')) return 'サーバーが混雑しています。しばらく待ってから再度お試しください。';
@@ -275,6 +417,52 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     // 前回のSnackBarが残っている場合は消す（FIX-041）
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    // 分析処理選択画面（REQ-012）
+    final analysisType = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text(
+          'AI分析処理を選択',
+          style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 15),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Text('📋', style: TextStyle(fontSize: 20)),
+              title: const Text('自動目次作成',
+                  style: TextStyle(color: Color(0xFFF0F0F8))),
+              subtitle: const Text('テキストの章・節を自動で目次にする',
+                  style: TextStyle(color: Color(0xFF8888AA), fontSize: 12)),
+              onTap: () => Navigator.of(context).pop('toc'),
+            ),
+            ListTile(
+              leading: const Text('📊', style: TextStyle(fontSize: 20)),
+              title: const Text('表の解説作成',
+                  style: TextStyle(color: Color(0xFFF0F0F8))),
+              subtitle: const Text('表を検出して説明文を生成する',
+                  style: TextStyle(color: Color(0xFF8888AA), fontSize: 12)),
+              onTap: () => Navigator.of(context).pop('table'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('キャンセル',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+        ],
+      ),
+    );
+
+    if (analysisType == null || !context.mounted) return;
+    if (analysisType == 'table') {
+      await _showTableAnalysisDialog(context, vm, state, aiProvider);
+      return;
+    }
 
     const storage = FlutterSecureStorage();
     final apiKeySettingKey = aiProvider == 'claude'

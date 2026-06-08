@@ -7,7 +7,7 @@ class Bookmark {
   final String? label;
   final int createdAt;
 
-  static const int maxLabelLength = 50;
+  static const int maxLabelLength = 60;
 
   Bookmark({
     String? id,

@@ -108,10 +108,9 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   Future<void> _playChunk(int index) async {
     if (index >= _chunks.length) return;
     final chunk = _chunks[index];
-    // 新チャンク開始時は_currentPositionをリセット（再開時は維持）（FIX-021）
-    if (!_isResuming) {
-      _currentPosition = chunk.startPosition;
-    }
+    // 新チャンク開始時は_isResumingをリセットして通常計算に戻す（FIX-021）
+    _isResuming = false;
+    _currentPosition = chunk.startPosition;
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,
       isPlaying: true,
@@ -125,11 +124,8 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       final chunkStart = chunk.startPosition;
       int absolutePosition;
       if (_isResuming) {
-        // 再開後は_pausedPositionを基準にstartOffsetを加算（FIX-021）
+        // 再開後はチャンク切り替わりまで_pausedPositionを基準にstartOffsetを加算（FIX-021）
         absolutePosition = _pausedPosition + startOffset;
-        if (startOffset > 0) {
-          _isResuming = false; // startOffset>0になったら通常モードに戻る
-        }
         _currentPosition = absolutePosition;
       } else {
         absolutePosition = chunkStart + startOffset;

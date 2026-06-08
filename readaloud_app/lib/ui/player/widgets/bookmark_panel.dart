@@ -79,7 +79,7 @@ class _BookmarkPanelState extends State<BookmarkPanel> {
                       children: [
                         Text('🤖', style: TextStyle(fontSize: 14)),
                         SizedBox(width: 2),
-                        Text('AI目次', style: TextStyle(fontSize: 10, color: Color(0xFF9B6FE0))),
+                        Text('AI分析', style: TextStyle(fontSize: 10, color: Color(0xFF9B6FE0))),
                       ],
                     ),
                   ),

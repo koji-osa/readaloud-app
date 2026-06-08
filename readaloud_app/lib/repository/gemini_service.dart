@@ -82,7 +82,7 @@ class GeminiService {
       final seconds = currentSecs % 60;
       final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
       final excerptTrimmed =
-          excerpt.length > 15 ? excerpt.substring(0, 15) : excerpt;
+          excerpt.length > 25 ? excerpt.substring(0, 25) : excerpt;
       final rawLabel = '[目次] $timeLabel $excerptTrimmed';
       // Bookmark.maxLabelLength（50文字）以内に切り詰め
       final label = rawLabel.length > Bookmark.maxLabelLength
@@ -116,12 +116,12 @@ class GeminiService {
 ルール：
 - テキストが1,000文字未満の場合は3箇所程度
 - テキストが1,000文字以上の場合は5〜15箇所程度
-- 各区切りの文字位置（0始まりのインデックス）とその箇所の冒頭15文字を返す
+- 各区切りの文字位置（0始まりのインデックス）とその箇所の冒頭25文字を返す
 - 必ずJSON形式のみで返す（説明文・マークダウン記号不要）
 
 JSONフォーマット：
 [
-  {"position": 0, "excerpt": "冒頭15文字"},
+  {"position": 0, "excerpt": "冒頭25文字"},
   {"position": 150, "excerpt": "次の区切りの15文字"}
 ]
 
