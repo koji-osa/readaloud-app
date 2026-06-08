@@ -19,6 +19,7 @@ import '../../repository/impl/content_repository_impl.dart';
 import '../../repository/impl/playback_repository_impl.dart';
 import '../../repository/impl/bookmark_repository_impl.dart';
 import '../../repository/impl/settings_repository_impl.dart';
+import '../home/widgets/tts_usage_banner.dart';
 
 import 'widgets/highlight_text.dart';
 import 'widgets/seek_bar.dart';
@@ -126,6 +127,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(playerViewModelProvider);
     final vm    = ref.read(playerViewModelProvider.notifier);
+    final settingsState = ref.watch(settingsViewModelProvider);
 
     return Scaffold(
       body: SafeArea(
@@ -225,7 +227,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     onAdd: () => _showAddBookmarkDialog(context, vm, state),
                     onDelete: (id) => vm.deleteBookmark(id),
                     onJump: (position) => vm.seekToBookmark(position),
-                    onAnalyze: () => _showAnalyzeDialog(context, vm, state), // REQ-011
+                    onAnalyze: () => _showAnalyzeDialog(context, vm, state, settingsState.aiProvider), // REQ-011
                   ),
                 ),
               ),
@@ -267,6 +269,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     BuildContext context,
     PlayerViewModel vm,
     PlayerState state,
+    String aiProvider,
   ) async {
     if (state.content == null) return;
 
@@ -274,15 +277,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
     const storage = FlutterSecureStorage();
-    final provider = await storage.read(key: SettingKeys.aiProvider) ?? 'gemini';
-    final apiKeySettingKey = provider == 'claude'
+    final apiKeySettingKey = aiProvider == 'claude'
         ? SettingKeys.claudeApiKey
         : SettingKeys.geminiApiKey;
     final apiKey = await storage.read(key: apiKeySettingKey);
     if (!context.mounted) return;
 
     if (apiKey == null || apiKey.isEmpty) {
-      final providerName = provider == 'claude' ? 'Claude' : 'Gemini';
+      final providerName = aiProvider == 'claude' ? 'Claude' : 'Gemini';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('設定画面で$providerName APIキーを設定してください'),
@@ -299,7 +301,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         builder: (context, setState) => AlertDialog(
           backgroundColor: const Color(0xFF2A2A3E),
           title: Text(
-            provider == 'claude'
+            aiProvider == 'claude'
                 ? 'AI目次作成 - Claude API利用について'
                 : 'AI目次作成 - Gemini API利用について',
             style: const TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
@@ -309,7 +311,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                provider == 'claude'
+                aiProvider == 'claude'
                     ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
                     : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
@@ -354,14 +356,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('🤖 テキストを分析中...'),
-        duration: Duration(seconds: 30),
+        duration: Duration(seconds: 120),
         backgroundColor: Color(0xFF7C5CBF),
       ),
     );
 
     try {
       final List<Bookmark> bookmarks;
-      if (provider == 'claude') {
+      if (aiProvider == 'claude') {
         bookmarks = await ClaudeService().analyzeAndCreateBookmarks(
           contentId: state.content!.id,
           text: state.content!.body,

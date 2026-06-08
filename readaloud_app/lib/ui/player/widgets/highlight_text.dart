@@ -20,6 +20,7 @@ class HighlightText extends StatefulWidget {
 class _HighlightTextState extends State<HighlightText> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _richTextKey = GlobalKey(); // REQ-001
+  bool _userScrolled = false; // 手動スクロールフラグ（FIX-039）
 
   @override
   void didUpdateWidget(HighlightText oldWidget) {
@@ -38,8 +39,19 @@ class _HighlightTextState extends State<HighlightText> {
     final viewportHeight = _scrollController.position.viewportDimension;
     final targetScroll = (maxScroll * ratio - viewportHeight * 0.5)
         .clamp(0.0, maxScroll);
-
     final currentScroll = _scrollController.offset;
+
+    // 手動スクロール中の場合（FIX-039）
+    if (_userScrolled) {
+      // ハイライトが現在のビューポート内に入ったら自動スクロール再開
+      final highlightInView = (targetScroll - currentScroll).abs() < viewportHeight;
+      if (highlightInView) {
+        _userScrolled = false;
+      } else {
+        return; // まだ範囲外なのでスキップ
+      }
+    }
+
     if ((targetScroll - currentScroll).abs() > 50) {
       _scrollController.animateTo(
         targetScroll,
@@ -86,13 +98,22 @@ class _HighlightTextState extends State<HighlightText> {
       ),
       child: GestureDetector(
         onTapUp: widget.onTap != null ? _handleTap : null,
-        child: SingleChildScrollView(
-          controller: _scrollController,
-          child: RichText(
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (notification) {
+            // UserScrollNotificationはユーザー操作のみ発火（animateToでは発火しない）
+            if (notification is UserScrollNotification) {
+              _userScrolled = true; // 手動スクロールを検知（FIX-039）
+            }
+            return false;
+          },
+          child: SingleChildScrollView(
+            controller: _scrollController,
+            child: RichText(
             key: _richTextKey,
             text: TextSpan(
               children: _buildTextSpans(),
             ),
+          ),
           ),
         ),
       ),
