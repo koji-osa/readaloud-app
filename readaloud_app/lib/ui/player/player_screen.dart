@@ -1,6 +1,7 @@
 import '../../providers.dart';
 import '../../repository/gemini_service.dart';
 import '../../repository/claude_service.dart';
+import '../../repository/groq_service.dart';
 import '../../repository/table_analysis_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../model/setting.dart';
@@ -14,6 +15,7 @@ import '../../usecase/playback/save_playback_state_usecase.dart';
 import '../../usecase/playback/set_ab_repeat_usecase.dart';
 import '../../usecase/bookmark/add_bookmark_usecase.dart';
 import '../../usecase/bookmark/delete_bookmark_usecase.dart';
+import '../../usecase/content/update_content_usecase.dart';
 import '../../usecase/tts/check_tts_limit_usecase.dart';
 import '../../usecase/tts/count_tts_usage_usecase.dart';
 import '../../repository/impl/content_repository_impl.dart';
@@ -70,6 +72,7 @@ final playerViewModelProvider =
     setAbRepeat: SetAbRepeatUseCase(playbackRepo),
     addBookmark: AddBookmarkUseCase(bookmarkRepo),
     deleteBookmark: DeleteBookmarkUseCase(bookmarkRepo),
+    updateContent: UpdateContentUseCase(contentRepo),
     bookmarkRepo: bookmarkRepo,
     checkTtsLimit: checkTtsLimit,
     audioHandler: audioHandler,
@@ -266,41 +269,56 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   ) async {
     if (state.content == null) return;
 
-    const storage = FlutterSecureStorage();
-    final apiKeySettingKey = aiProvider == 'claude'
-        ? SettingKeys.claudeApiKey
-        : SettingKeys.geminiApiKey;
-    final apiKey = await storage.read(key: apiKeySettingKey);
-    if (!context.mounted) return;
 
-    if (apiKey == null || apiKey.isEmpty) {
-      final providerName = aiProvider == 'claude' ? 'Claude' : 'Gemini';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('設定画面で$providerName APIキーを設定してください'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-      return;
-    }
-
+    String selectedProvider = aiProvider; // デフォルトは設定画面の選択（FIX-045）
     bool shouldClean = true;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           backgroundColor: const Color(0xFF2A2A3E),
-          title: Text(
-            '表の解説作成 - ${aiProvider == 'claude' ? 'Claude' : 'Gemini'} API利用について',
-            style: const TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
+          title: const Text(
+            '表の解説作成 - API利用について',
+            style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Text("使用するAPI",
+                  style: TextStyle(fontSize: 12, color: Color(0xFFF0F0F8))),
+              Row(
+                children: [
+                  Radio<String>(
+                    value: 'gemini',
+                    groupValue: selectedProvider,
+                    onChanged: (v) => setState(() => selectedProvider = v!),
+                    activeColor: const Color(0xFF9B6FE0),
+                  ),
+                  const Text("Gemini", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                  const SizedBox(width: 8),
+                  Radio<String>(
+                    value: 'claude',
+                    groupValue: selectedProvider,
+                    onChanged: (v) => setState(() => selectedProvider = v!),
+                    activeColor: const Color(0xFF9B6FE0),
+                  ),
+                  const Text("Claude", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                  const SizedBox(width: 8),
+                  Radio<String>(
+                    value: 'groq',
+                    groupValue: selectedProvider,
+                    onChanged: (v) => setState(() => selectedProvider = v!),
+                    activeColor: const Color(0xFF9B6FE0),
+                  ),
+                  const Text("Groq", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                ],
+              ),
               Text(
-                aiProvider == 'claude'
+                selectedProvider == 'claude'
                     ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
+                    : selectedProvider == 'groq'
+                    ? 'Groqのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
                     : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
               ),
@@ -340,6 +358,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
 
     if (confirmed != true || !context.mounted) return;
+    // ダイアログで選択されたAPIのキーを取得（FIX-045）
+    const storage = FlutterSecureStorage();
+    final apiKey = await storage.read(
+      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : selectedProvider == 'groq' ? SettingKeys.groqApiKey : SettingKeys.geminiApiKey,
+    );
+    if (!context.mounted) return;
+    if (apiKey == null || apiKey.isEmpty) {
+      final providerName = selectedProvider == 'claude' ? 'Claude' : selectedProvider == 'groq' ? 'Groq' : 'Gemini';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('設定画面で$providerName APIキーを設定してください'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -355,7 +389,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         contentId: state.content!.id,
         text: state.content!.body,
         apiKey: apiKey,
-        provider: aiProvider,
+        provider: selectedProvider,
         shouldClean: shouldClean,
         speed: state.playbackState?.speed ?? 1.0,
         totalChars: state.content!.body.length,
@@ -376,6 +410,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
       for (final bookmark in result.bookmarks) {
         await vm.addBookmarkDirect(bookmark);
+      }
+
+      // 表解説テキストを本文に追記（FIX-049）
+      // 後ろの表から順に挿入することで位置ズレを防ぐ
+      final sortedTables = result.tables.toList()
+        ..sort((a, b) => b.endPosition.compareTo(a.endPosition));
+      for (final table in sortedTables) {
+        await vm.appendTableDescription(
+          insertPosition: table.endPosition,
+          description: table.description,
+        );
       }
 
       if (context.mounted) {
@@ -464,43 +509,56 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       return;
     }
 
-    const storage = FlutterSecureStorage();
-    final apiKeySettingKey = aiProvider == 'claude'
-        ? SettingKeys.claudeApiKey
-        : SettingKeys.geminiApiKey;
-    final apiKey = await storage.read(key: apiKeySettingKey);
-    if (!context.mounted) return;
 
-    if (apiKey == null || apiKey.isEmpty) {
-      final providerName = aiProvider == 'claude' ? 'Claude' : 'Gemini';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('設定画面で$providerName APIキーを設定してください'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-      return;
-    }
-
+    String selectedProvider = aiProvider; // FIX-045
     bool shouldClean = true;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           backgroundColor: const Color(0xFF2A2A3E),
-          title: Text(
-            aiProvider == 'claude'
-                ? 'AI目次作成 - Claude API利用について'
-                : 'AI目次作成 - Gemini API利用について',
-            style: const TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
+          title: const Text(
+            'AI目次作成 - API利用について',
+            style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 14),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Text("使用するAPI",
+                  style: TextStyle(fontSize: 12, color: Color(0xFFF0F0F8))),
+              Row(
+                children: [
+                  Radio<String>(
+                    value: 'gemini',
+                    groupValue: selectedProvider,
+                    onChanged: (v) => setState(() => selectedProvider = v!),
+                    activeColor: const Color(0xFF9B6FE0),
+                  ),
+                  const Text("Gemini", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                  const SizedBox(width: 8),
+                  Radio<String>(
+                    value: 'claude',
+                    groupValue: selectedProvider,
+                    onChanged: (v) => setState(() => selectedProvider = v!),
+                    activeColor: const Color(0xFF9B6FE0),
+                  ),
+                  const Text("Claude", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                  const SizedBox(width: 8),
+                  Radio<String>(
+                    value: 'groq',
+                    groupValue: selectedProvider,
+                    onChanged: (v) => setState(() => selectedProvider = v!),
+                    activeColor: const Color(0xFF9B6FE0),
+                  ),
+                  const Text("Groq", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                ],
+              ),
               Text(
-                aiProvider == 'claude'
+                selectedProvider == 'claude'
                     ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
+                    : selectedProvider == 'groq'
+                    ? 'Groqのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
                     : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
               ),
@@ -539,6 +597,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       ),
     );
 
+    const storage2 = FlutterSecureStorage();
+    final apiKey = await storage2.read(
+      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : selectedProvider == 'groq' ? SettingKeys.groqApiKey : SettingKeys.geminiApiKey,
+    );
+    if (!context.mounted) return;
+    if (apiKey == null || apiKey.isEmpty) {
+      final providerName = selectedProvider == 'claude' ? 'Claude' : selectedProvider == 'groq' ? 'Groq' : 'Gemini';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('設定画面で$providerName APIキーを設定してください'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
     if (confirmed != true || !context.mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -551,7 +624,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     try {
       final List<Bookmark> bookmarks;
-      if (aiProvider == 'claude') {
+      if (selectedProvider == 'groq') {
+        bookmarks = await GroqService().analyzeAndCreateBookmarks(
+          contentId: state.content!.id,
+          text: state.content!.body,
+          apiKey: apiKey,
+          shouldClean: shouldClean,
+          speed: state.playbackState?.speed ?? 1.0,
+          totalChars: state.content!.body.length,
+        );
+      } else if (selectedProvider == 'claude') {
         bookmarks = await ClaudeService().analyzeAndCreateBookmarks(
           contentId: state.content!.id,
           text: state.content!.body,

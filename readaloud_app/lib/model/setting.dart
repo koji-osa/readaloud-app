@@ -49,4 +49,5 @@ class SettingKeys {
   static const String geminiApiKey         = 'gemini_api_key';
   static const String claudeApiKey         = 'claude_api_key';
   static const String aiProvider           = 'ai_provider';
+  static const String groqApiKey           = 'groq_api_key';
 }

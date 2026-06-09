@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:openai_dart/openai_dart.dart';
 import '../model/bookmark.dart';
 import '../util/text_cleaner.dart';
 
@@ -19,16 +20,20 @@ class TableAnalysisService {
     final sendText = shouldClean ? TextCleaner.clean(text) : text;
     final prompt = _buildPrompt(sendText);
 
-    final dynamic responseData;
-    if (provider == 'claude') {
-      responseData = await _callClaude(apiKey, prompt);
+    final String content;
+    if (provider == 'groq') {
+      content = await _callGroq(apiKey, prompt);
     } else {
-      responseData = await _callGemini(apiKey, prompt);
+      final dynamic responseData;
+      if (provider == 'claude') {
+        responseData = await _callClaude(apiKey, prompt);
+      } else {
+        responseData = await _callGemini(apiKey, prompt);
+      }
+      content = provider == 'claude'
+          ? responseData['content'][0]['text']
+          : responseData['candidates'][0]['content']['parts'][0]['text'];
     }
-
-    final content = provider == 'claude'
-        ? responseData['content'][0]['text']
-        : responseData['candidates'][0]['content']['parts'][0]['text'];
 
     final cleaned = content
         .toString()
@@ -100,6 +105,29 @@ class TableAnalysisService {
         tables: tables, bookmarks: bookmarks, noTableFound: false);
   }
 
+  Future<String> _callGroq(String apiKey, String prompt) async {
+    final client = OpenAIClient(
+      baseUrl: 'https://api.groq.com/openai/v1',
+      headers: {'api-key': apiKey},
+    );
+    try {
+      final res = await client.createChatCompletion(
+        request: CreateChatCompletionRequest(
+          model: ChatCompletionModel.modelId('llama-3.3-70b-versatile'),
+          messages: [
+            ChatCompletionMessage.user(
+              content: ChatCompletionUserMessageContent.string(prompt),
+            ),
+          ],
+          maxTokens: 6000,
+        ),
+      );
+      return res.choices.first.message.content ?? '';
+    } finally {
+      client.endSession();
+    }
+  }
+
   Future<dynamic> _callGemini(String apiKey, String prompt) async {
     const model = 'gemini-2.5-flash';
     const baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -151,6 +179,12 @@ class TableAnalysisService {
 - スペース区切りの数値（100 200 300 のように数値が並ぶ行）
 - 罫線文字（┌─┬─┐ などの罫線を使った表）
 - 見出し+数値の繰り返しパターン（売上: 100万円、利益: 20万円 など）
+
+判定の除外条件（以下は表として検出しない）：
+- 単純な数値を含む説明文や文章（例：「売上は100億円を達成した」）
+- 1列のみのリスト（箇条書き・番号付きリストなど）
+- 1行のみのデータ
+- 表の構造（2列以上・2行以上）を持たないもの
 
 ルール：
 - 表や数値データが見つかった場合：その内容・意味・特徴を説明する（最大3000文字）

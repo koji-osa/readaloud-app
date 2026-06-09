@@ -16,6 +16,7 @@ import '../usecase/playback/save_playback_state_usecase.dart';
 import '../usecase/playback/set_ab_repeat_usecase.dart';
 import '../usecase/bookmark/add_bookmark_usecase.dart';
 import '../usecase/bookmark/delete_bookmark_usecase.dart';
+import '../usecase/content/update_content_usecase.dart';
 import '../usecase/tts/check_tts_limit_usecase.dart';
 
 class PlayerState {
@@ -72,6 +73,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final SetAbRepeatUseCase _setAbRepeat;
   final AddBookmarkUseCase _addBookmark;
   final DeleteBookmarkUseCase _deleteBookmark;
+  final UpdateContentUseCase _updateContent;
   // ignore: unused_field
   final CheckTtsLimitUseCase _checkTtsLimit;
   final TtsAudioHandler _audioHandler;
@@ -88,6 +90,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required SetAbRepeatUseCase setAbRepeat,
     required AddBookmarkUseCase addBookmark,
     required DeleteBookmarkUseCase deleteBookmark,
+    required UpdateContentUseCase updateContent,
     required CheckTtsLimitUseCase checkTtsLimit,
     required TtsAudioHandler audioHandler,
     required PlaybackRepository playbackRepo,
@@ -99,6 +102,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _setAbRepeat = setAbRepeat,
         _addBookmark = addBookmark,
         _deleteBookmark = deleteBookmark,
+        _updateContent = updateContent,
         _checkTtsLimit = checkTtsLimit,
         _audioHandler = audioHandler,
         _playbackRepo = playbackRepo,
@@ -429,6 +433,29 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       );
     } catch (e) {
       state = state.copyWith(errorMessage: 'ブックマークの追加に失敗しました: $e');
+    }
+  }
+
+  /// 表解説テキストを本文に追記（FIX-049）
+  Future<void> appendTableDescription({
+    required int insertPosition,
+    required String description,
+  }) async {
+    if (state.content == null) return;
+    try {
+      final currentBody = state.content!.body;
+      final newBody = currentBody.substring(0, insertPosition) +
+          '\n\n$description\n\n' +
+          currentBody.substring(insertPosition);
+      await _updateContent.execute(
+        id: state.content!.id,
+        body: newBody,
+      );
+      state = state.copyWith(
+        content: state.content!.copyWith(body: newBody),
+      );
+    } catch (e) {
+      state = state.copyWith(errorMessage: 'テキストの更新に失敗しました: $e');
     }
   }
 
