@@ -21,7 +21,7 @@ class GroqService {
 
     final client = OpenAIClient(
       baseUrl: _baseUrl,
-      headers: {'api-key': apiKey},
+      apiKey: apiKey,
     );
 
     try {

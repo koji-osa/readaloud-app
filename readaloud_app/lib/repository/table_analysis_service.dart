@@ -108,7 +108,7 @@ class TableAnalysisService {
   Future<String> _callGroq(String apiKey, String prompt) async {
     final client = OpenAIClient(
       baseUrl: 'https://api.groq.com/openai/v1',
-      headers: {'api-key': apiKey},
+      apiKey: apiKey,
     );
     try {
       final res = await client.createChatCompletion(
