@@ -5,6 +5,7 @@ import '../../viewmodel/settings_viewmodel.dart';
 import '../../model/setting.dart';
 import '../home/widgets/tts_usage_banner.dart';
 import '../../util/debug_logger.dart';
+import '../../util/table_debug_logger.dart'; // FIX-050
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -258,6 +259,13 @@ class SettingsScreen extends ConsumerWidget {
                     value: '',
                     onTap: () => _downloadDebugLog(context),
                   ),
+                  const _Divider(),
+                  _SettingRow(
+                    icon: Icons.table_chart,
+                    label: 'FIX-050表分析ログをダウンロード',
+                    value: '',
+                    onTap: () => _downloadTableDebugLog(context),
+                  ),
                 ],
               ),
             ),
@@ -266,6 +274,26 @@ class SettingsScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _downloadTableDebugLog(BuildContext context) async {
+    final path = await TableDebugLogger.instance.copyToDownloads();
+    if (!context.mounted) return;
+    if (path != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('ダウンロードフォルダに保存しました'),
+          backgroundColor: const Color(0xFF7C5CBF),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('保存に失敗しました（ログがないか期限切れの可能性があります）'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Future<void> _downloadDebugLog(BuildContext context) async {
