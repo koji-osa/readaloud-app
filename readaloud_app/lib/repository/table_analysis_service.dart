@@ -190,6 +190,7 @@ class TableAnalysisService {
             ),
           ],
           maxTokens: 6000,
+          responseFormat: ResponseFormat.jsonObject(), // FIX-055
         ),
       );
       return res.choices.first.message.content ?? '';
@@ -223,7 +224,7 @@ class TableAnalysisService {
       baseUrl,
       data: {
         'model': model,
-        'max_tokens': 6000,
+        'max_tokens': 8000, // FIX-055: 返答が途中で切れる問題の対策
         'messages': [{'role': 'user', 'content': prompt}],
       },
       options: Options(

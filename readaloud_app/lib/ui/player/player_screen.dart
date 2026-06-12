@@ -450,8 +450,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final msg = e.toString();
     if (msg.contains('503')) return 'サーバーが混雑しています。しばらく待ってから再度お試しください。';
     if (msg.contains('401') || msg.contains('403')) return 'APIキーが無効です。設定画面で確認してください。';
+    if (msg.contains('429')) return 'APIの利用制限に達しました。しばらく待ってから再度お試しください。'; // FIX-054
     if (msg.contains('timeout')) return '通信がタイムアウトしました。再度お試しください。';
-    return '分析に失敗しました。再度お試しください。';
+    if (msg.contains('FormatException') || msg.contains('json')) return 'AIの返答形式が不正でした。再度お試しください。'; // FIX-054
+    return '分析に失敗しました（$msg）。再度お試しください。'; // FIX-054: エラー詳細を表示
   }
 
   Future<void> _showAnalyzeDialog(
