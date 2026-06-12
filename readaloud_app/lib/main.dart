@@ -31,7 +31,7 @@ void main() async {
   await AudioService.androidForceEnableMediaButtons();
 
   // FIX-021調査用ログ初期化
-  await DebugLogger.instance.init(appVersion: '1.1.8+18');
+  await DebugLogger.instance.init(appVersion: '1.2.9+29');
 
   runApp(
     ProviderScope(

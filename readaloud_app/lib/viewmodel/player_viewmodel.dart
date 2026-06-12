@@ -445,7 +445,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     try {
       final currentBody = state.content!.body;
       final newBody = currentBody.substring(0, insertPosition) +
-          '\n\n$description\n\n' +
+          '\n\n$description\n\n以上、表の解説終了。\n\n' + // FIX-052
           currentBody.substring(insertPosition);
       await _updateContent.execute(
         id: state.content!.id,

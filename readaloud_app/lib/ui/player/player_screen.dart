@@ -231,7 +231,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     onAdd: () => _showAddBookmarkDialog(context, vm, state),
                     onDelete: (id) => vm.deleteBookmark(id),
                     onJump: (position) => vm.seekToBookmark(position),
-                    onAnalyze: () => _showAnalyzeDialog(context, vm, state, settingsState.aiProvider), // REQ-011
+                    onAnalyze: () => _showAnalyzeDialog(context, vm, state, settingsState.aiProvider, settingsState.tocPrompt, settingsState.tablePrompt), // REQ-011
                   ),
                 ),
               ),
@@ -266,6 +266,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     PlayerViewModel vm,
     PlayerState state,
     String aiProvider,
+    String tablePrompt, // REQ-031
   ) async {
     if (state.content == null) return;
 
@@ -393,6 +394,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         shouldClean: shouldClean,
         speed: state.playbackState?.speed ?? 1.0,
         totalChars: state.content!.body.length,
+        customPrompt: tablePrompt, // REQ-031
       );
 
       if (!context.mounted) return;
@@ -457,6 +459,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     PlayerViewModel vm,
     PlayerState state,
     String aiProvider,
+    String tocPrompt, // REQ-031
+    String tablePrompt, // REQ-031
   ) async {
     if (state.content == null) return;
 
@@ -505,7 +509,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     if (analysisType == null || !context.mounted) return;
     if (analysisType == 'table') {
-      await _showTableAnalysisDialog(context, vm, state, aiProvider);
+      await _showTableAnalysisDialog(context, vm, state, aiProvider, tablePrompt); // REQ-031
       return;
     }
 
@@ -632,6 +636,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           shouldClean: shouldClean,
           speed: state.playbackState?.speed ?? 1.0,
           totalChars: state.content!.body.length,
+          customPrompt: tocPrompt, // REQ-031
         );
       } else if (selectedProvider == 'claude') {
         bookmarks = await ClaudeService().analyzeAndCreateBookmarks(
@@ -641,6 +646,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           shouldClean: shouldClean,
           speed: state.playbackState?.speed ?? 1.0,
           totalChars: state.content!.body.length,
+          customPrompt: tocPrompt, // REQ-031
         );
       } else {
         bookmarks = await GeminiService().analyzeAndCreateBookmarks(
@@ -650,6 +656,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           shouldClean: shouldClean,
           speed: state.playbackState?.speed ?? 1.0,
           totalChars: state.content!.body.length,
+          customPrompt: tocPrompt, // REQ-031
         );
       }
       for (final bookmark in bookmarks) {

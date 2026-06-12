@@ -18,6 +18,8 @@ class SettingsState {
   final bool ttsFallbackDevice;
   final bool cloudSyncEnabled;
   final String aiProvider; // 'gemini' or 'claude'（REQ-023）
+  final String tocPrompt; // REQ-031
+  final String tablePrompt; // REQ-031
 
   SettingsState({
     this.isLoading = false,
@@ -34,6 +36,8 @@ class SettingsState {
     this.ttsFallbackDevice = true,
     this.cloudSyncEnabled = true,
     this.aiProvider = 'gemini',
+    this.tocPrompt = '', // REQ-031
+    this.tablePrompt = '', // REQ-031
   });
 
   SettingsState copyWith({
@@ -51,6 +55,8 @@ class SettingsState {
     bool? ttsFallbackDevice,
     bool? cloudSyncEnabled,
     String? aiProvider,
+    String? tocPrompt, // REQ-031
+    String? tablePrompt, // REQ-031
   }) =>
       SettingsState(
         isLoading: isLoading ?? this.isLoading,
@@ -67,6 +73,8 @@ class SettingsState {
         ttsFallbackDevice: ttsFallbackDevice ?? this.ttsFallbackDevice,
         cloudSyncEnabled: cloudSyncEnabled ?? this.cloudSyncEnabled,
         aiProvider: aiProvider ?? this.aiProvider,
+        tocPrompt: tocPrompt ?? this.tocPrompt, // REQ-031
+        tablePrompt: tablePrompt ?? this.tablePrompt, // REQ-031
       );
 
   // TTS使用量の割合（0.0〜1.0）
@@ -110,6 +118,8 @@ class SettingsViewModel extends StateNotifier<SettingsState> {
         ttsFallbackDevice: all[SettingKeys.ttsFallbackDevice] != 'false',
         cloudSyncEnabled: all[SettingKeys.cloudSyncEnabled] != 'false',
         aiProvider: all[SettingKeys.aiProvider] ?? 'gemini',
+        tocPrompt: all[SettingKeys.tocPrompt] ?? '', // REQ-031
+        tablePrompt: all[SettingKeys.tablePrompt] ?? '', // REQ-031
       );
     } catch (e) {
       state = state.copyWith(

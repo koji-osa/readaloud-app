@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:openai_dart/openai_dart.dart';
 import '../model/bookmark.dart';
 import '../util/text_cleaner.dart';
+import '../util/table_debug_logger.dart'; // FIX-050
 
 /// REQ-012: 表の自動分析・説明文章作成
 class TableAnalysisService {
@@ -16,24 +17,42 @@ class TableAnalysisService {
     required bool shouldClean,
     required double speed,
     required int totalChars,
+    String customPrompt = '', // REQ-031
   }) async {
+    final stopwatch = Stopwatch()..start(); // FIX-050
+    await TableDebugLogger.instance.startAnalysis( // FIX-050
+      provider: provider, // FIX-050
+      textLength: text.length, // FIX-050
+      shouldClean: shouldClean, // FIX-050
+    ); // FIX-050
     final sendText = shouldClean ? TextCleaner.clean(text) : text;
-    final prompt = _buildPrompt(sendText);
+    final prompt = customPrompt.isNotEmpty
+        ? '$customPrompt\n\nテキスト：\n$sendText'
+        : _buildPrompt(sendText);
+    TableDebugLogger.instance.logPrompt(prompt.length); // FIX-050
 
     final String content;
-    if (provider == 'groq') {
-      content = await _callGroq(apiKey, prompt);
-    } else {
-      final dynamic responseData;
-      if (provider == 'claude') {
-        responseData = await _callClaude(apiKey, prompt);
+    try { // FIX-050
+      if (provider == 'groq') {
+        content = await _callGroq(apiKey, prompt);
       } else {
-        responseData = await _callGemini(apiKey, prompt);
+        final dynamic responseData;
+        if (provider == 'claude') {
+          responseData = await _callClaude(apiKey, prompt);
+        } else {
+          responseData = await _callGemini(apiKey, prompt);
+        }
+        content = provider == 'claude'
+            ? responseData['content'][0]['text']
+            : responseData['candidates'][0]['content']['parts'][0]['text'];
       }
-      content = provider == 'claude'
-          ? responseData['content'][0]['text']
-          : responseData['candidates'][0]['content']['parts'][0]['text'];
-    }
+      TableDebugLogger.instance.logResponse(content); // FIX-050
+    } catch (e) { // FIX-050
+      TableDebugLogger.instance.logApiError(e.toString()); // FIX-050
+      await TableDebugLogger.instance.finishAnalysis( // FIX-050
+        tableCount: 0, bookmarkCount: 0, elapsedMillis: stopwatch.elapsedMilliseconds); // FIX-050
+      rethrow; // FIX-050
+    } // FIX-050
 
     final cleaned = content
         .toString()
@@ -42,10 +61,22 @@ class TableAnalysisService {
         .trim();
 
     if (cleaned.contains('"result"') && cleaned.contains('表なし')) {
+      TableDebugLogger.instance.logParsed(0); // FIX-050
+      await TableDebugLogger.instance.finishAnalysis( // FIX-050
+        tableCount: 0, bookmarkCount: 0, elapsedMillis: stopwatch.elapsedMilliseconds); // FIX-050
       return TableAnalysisResult(tables: [], noTableFound: true);
     }
 
-    final List<dynamic> items = json.decode(cleaned);
+    final List<dynamic> items; // FIX-050
+    try { // FIX-050
+      items = json.decode(cleaned); // FIX-050
+      TableDebugLogger.instance.logParsed(items.length); // FIX-050
+    } catch (e) { // FIX-050
+      TableDebugLogger.instance.logParseError(cleaned); // FIX-050
+      await TableDebugLogger.instance.finishAnalysis( // FIX-050
+        tableCount: 0, bookmarkCount: 0, elapsedMillis: stopwatch.elapsedMilliseconds); // FIX-050
+      rethrow; // FIX-050
+    } // FIX-050
 
     final safeSpeed = speed > 0 ? speed : 1.0;
     final safeTotalChars = totalChars > 0 ? totalChars : 1;
@@ -53,11 +84,13 @@ class TableAnalysisService {
     final tables = <TableAnalysisItem>[];
     final bookmarks = <Bookmark>[];
 
+    // FIX-051: 一時リストに収集してから開始位置でソート・連番付与
+    final tempItems = <Map<String, dynamic>>[];
+
     for (final item in items) {
       final excerptStart = item['excerpt_start']?.toString() ?? '';
       final excerptEnd = item['excerpt_end']?.toString() ?? '';
       final description = item['description']?.toString() ?? '';
-      final index = item['index'] as int? ?? 0;
 
       if (excerptStart.isEmpty || description.isEmpty) continue;
 
@@ -72,6 +105,28 @@ class TableAnalysisService {
         }
       }
 
+      tempItems.add({
+        'excerptStart': excerptStart,
+        'excerptEnd': excerptEnd,
+        'description': description,
+        'startPos': startPos,
+        'endPos': endPos,
+      });
+    }
+
+    // 開始位置でソート（FIX-051）
+    tempItems.sort((a, b) => (a['startPos'] as int).compareTo(b['startPos'] as int));
+
+    // ソート後に連番を付与（FIX-051）
+    for (int i = 0; i < tempItems.length; i++) {
+      final t = tempItems[i];
+      final index = i + 1; // FIX-051: 1始まりの連番
+      final excerptStart = t['excerptStart'] as String;
+      final excerptEnd = t['excerptEnd'] as String;
+      final description = t['description'] as String;
+      final startPos = t['startPos'] as int;
+      final endPos = t['endPos'] as int;
+
       final totalSecs = safeTotalChars / (5.0 * safeSpeed);
       final currentSecs = (totalSecs * startPos / safeTotalChars).round();
       final minutes = currentSecs ~/ 60;
@@ -85,6 +140,16 @@ class TableAnalysisService {
           ? rawLabel.substring(0, Bookmark.maxLabelLength)
           : rawLabel;
 
+      // FIX-050: 表全文を抽出してログに記録
+      final tableText = endPos > startPos ? text.substring(startPos, endPos) : excerptStart;
+      TableDebugLogger.instance.logTableItem( // FIX-050
+        index: index, // FIX-050
+        startPosition: startPos, // FIX-050
+        endPosition: endPos, // FIX-050
+        tableText: tableText, // FIX-050
+        description: description, // FIX-050
+      ); // FIX-050
+
       bookmarks.add(Bookmark(
         contentId: contentId,
         position: startPos,
@@ -92,7 +157,7 @@ class TableAnalysisService {
       ));
 
       tables.add(TableAnalysisItem(
-        index: index,
+        index: index, // FIX-051: 連番
         startPosition: startPos,
         endPosition: endPos,
         excerptStart: excerptStart,
@@ -101,6 +166,11 @@ class TableAnalysisService {
       ));
     }
 
+    await TableDebugLogger.instance.finishAnalysis( // FIX-050
+      tableCount: tables.length, // FIX-050
+      bookmarkCount: bookmarks.length, // FIX-050
+      elapsedMillis: stopwatch.elapsedMilliseconds, // FIX-050
+    ); // FIX-050
     return TableAnalysisResult(
         tables: tables, bookmarks: bookmarks, noTableFound: false);
   }
@@ -172,24 +242,24 @@ class TableAnalysisService {
   String _buildPrompt(String text) {
     return '''以下のテキストを分析し、表や数値データが含まれている箇所を特定して、それぞれの内容を日本語で説明してください。
 
-表・数値データの目印となるパターン（例）：
-- パイプ区切り（| 項目 | 値 | のようなMarkdown形式）
-- カンマ区切り（項目A,項目B,項目C のようなCSV形式）
-- タブ区切り（項目A\t項目B\t項目C のようなTSV形式）
-- スペース区切りの数値（100 200 300 のように数値が並ぶ行）
-- 罫線文字（┌─┬─┐ などの罫線を使った表）
-- 見出し+数値の繰り返しパターン（売上: 100万円、利益: 20万円 など）
+検出対象：
+- 行と列の両方に意味のある見出しがあり、その交点に数値があるクロス集計構造のもの
+- 形式は問わない（パイプ区切り・カンマ区切り・スペース区切り・タブ区切り・罫線など）
+- 例：年度×売上/営業利益/経常利益/当期純利益、地域×製品別販売数、月次×費目別コストなど
 
 判定の除外条件（以下は表として検出しない）：
 - 単純な数値を含む説明文や文章（例：「売上は100億円を達成した」）
 - 1列のみのリスト（箇条書き・番号付きリストなど）
-- 1行のみのデータ
+- 1行のみの数値羅列（クロス集計の構造を持たないもの）（FIX-048追加）
+- 行と列の両方に意味のある見出しがなく、クロス集計の構造になっていないもの（FIX-048追加）
 - 表の構造（2列以上・2行以上）を持たないもの
 
 ルール：
 - 表や数値データが見つかった場合：その内容・意味・特徴を説明する（最大3000文字）
 - 複数の表がある場合：それぞれ番号をつけて説明する
 - 説明文は「表情報の解説：〇〇〇」の形式で記載する
+- excerpt_startは表の最初の行・ヘッダー行の冒頭25文字とする（FIX-053）
+- excerpt_endは表の最後の行の末尾25文字とする（表の後の説明文・考察・本文は含めない）（FIX-053）
 - 表や数値データが見つからない場合：{"result": "表なし"} のみ返す
 - 必ずJSON形式のみで返す（説明文・マークダウン記号不要）
 

@@ -19,12 +19,15 @@ class GeminiService {
     required bool shouldClean,
     required double speed,
     required int totalChars,
+    String customPrompt = '', // REQ-031
   }) async {
     // 前処理オプション
     final sendText = shouldClean ? TextCleaner.clean(text) : text;
 
-    // プロンプト構築
-    final prompt = _buildPrompt(sendText);
+    // プロンプト構築（カスタムプロンプト優先）
+    final prompt = customPrompt.isNotEmpty
+        ? '$customPrompt\n\nテキスト：\n$sendText'
+        : _buildPrompt(sendText);
 
     // Gemini API呼び出し
     final response = await _dio.post(
@@ -117,12 +120,14 @@ class GeminiService {
 - テキストが1,000文字未満の場合は3箇所程度
 - テキストが1,000文字以上の場合は5〜15箇所程度
 - 各区切りの文字位置（0始まりのインデックス）とその箇所の冒頭25文字を返す
+- 見出しの階層を1〜3の数字で返す（1=大見出し・章、2=中見出し・節、3=小見出し・項）（REQ-031）
+- 階層構造がない場合は全て level=1 とする（REQ-031）
 - 必ずJSON形式のみで返す（説明文・マークダウン記号不要）
 
 JSONフォーマット：
 [
-  {"position": 0, "excerpt": "冒頭25文字"},
-  {"position": 150, "excerpt": "次の区切りの15文字"}
+  {"position": 0, "excerpt": "冒頭25文字", "level": 1},
+  {"position": 150, "excerpt": "次の区切りの25文字", "level": 2}
 ]
 
 テキスト：

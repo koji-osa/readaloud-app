@@ -210,6 +210,29 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 16),
 
+            // AIプロンプト設定（REQ-031）
+            _SectionTitle(title: 'AIプロンプト設定'),
+            _SettingCard(
+              child: Column(
+                children: [
+                  _SettingRow(
+                    icon: Icons.edit_note,
+                    label: '目次作成プロンプト',
+                    value: state.tocPrompt.isNotEmpty ? '編集済み' : 'デフォルト',
+                    onTap: () => _showTocPromptDialog(context, vm, state.tocPrompt),
+                  ),
+                  const _Divider(),
+                  _SettingRow(
+                    icon: Icons.table_chart,
+                    label: '表解説プロンプト',
+                    value: state.tablePrompt.isNotEmpty ? '編集済み' : 'デフォルト',
+                    onTap: () => _showTablePromptDialog(context, vm, state.tablePrompt),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
             // データ管理
             _SectionTitle(title: 'データ管理'),
             _SettingCard(
@@ -491,6 +514,100 @@ class SettingsScreen extends ConsumerWidget {
                 );
               }
               if (context.mounted) Navigator.of(context).pop();
+            },
+            child: const Text('保存',
+                style: TextStyle(color: Color(0xFF9B6FE0))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showTocPromptDialog(
+      BuildContext context, dynamic vm, String current) async {
+    final controller = TextEditingController(text: current);
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text('目次作成プロンプト',
+            style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          maxLines: 8,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+          decoration: const InputDecoration(
+            hintText: '空欄の場合はデフォルトのプロンプトを使用します',
+            hintStyle: TextStyle(color: Color(0xFF8888AA)),
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              controller.text = '';
+              vm.saveSetting(SettingKeys.tocPrompt, '');
+              Navigator.pop(context);
+            },
+            child: const Text('デフォルトに戻す',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('キャンセル',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () {
+              vm.saveSetting(SettingKeys.tocPrompt, controller.text);
+              Navigator.pop(context);
+            },
+            child: const Text('保存',
+                style: TextStyle(color: Color(0xFF9B6FE0))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showTablePromptDialog(
+      BuildContext context, dynamic vm, String current) async {
+    final controller = TextEditingController(text: current);
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text('表解説プロンプト',
+            style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          maxLines: 8,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+          decoration: const InputDecoration(
+            hintText: '空欄の場合はデフォルトのプロンプトを使用します',
+            hintStyle: TextStyle(color: Color(0xFF8888AA)),
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              controller.text = '';
+              vm.saveSetting(SettingKeys.tablePrompt, '');
+              Navigator.pop(context);
+            },
+            child: const Text('デフォルトに戻す',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('キャンセル',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () {
+              vm.saveSetting(SettingKeys.tablePrompt, controller.text);
+              Navigator.pop(context);
             },
             child: const Text('保存',
                 style: TextStyle(color: Color(0xFF9B6FE0))),
