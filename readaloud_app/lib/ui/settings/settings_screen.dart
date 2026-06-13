@@ -277,12 +277,12 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _downloadTableDebugLog(BuildContext context) async {
-    final path = await TableDebugLogger.instance.copyToDownloads();
+    final count = await TableDebugLogger.instance.copyToDownloads();
     if (!context.mounted) return;
-    if (path != null) {
+    if (count > 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('ダウンロードフォルダに保存しました'),
+          content: Text('${count}件のログをダウンロードフォルダに保存しました'), // FIX-050修正
           backgroundColor: const Color(0xFF7C5CBF),
         ),
       );

@@ -126,19 +126,33 @@ class TableDebugLogger {
     _buffer.writeln('[$time] $message');
   }
 
-  /// Downloadフォルダにコピーする
-  Future<String?> copyToDownloads() async {
-    if (_logFile == null) return null;
+  /// 全ログファイルをDownloadフォルダにコピーする（FIX-050修正）
+  Future<int> copyToDownloads() async {
     try {
       const downloadPath = '/storage/emulated/0/Download';
       final downloadDir = Directory(downloadPath);
-      if (!await downloadDir.exists()) return null;
-      final dest = File('$downloadPath/${_logFile!.path.split('/').last}');
-      await _logFile!.copy(dest.path);
-      return dest.path;
+      if (!await downloadDir.exists()) return 0;
+      final appDir = await getApplicationDocumentsDirectory();
+      final files = appDir
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.contains('readaloud_fix050_'))
+          .toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+      int count = 0;
+      for (final file in files) {
+        try {
+          final dest = File('$downloadPath/${file.path.split('/').last}');
+          await file.copy(dest.path);
+          count++;
+        } catch (e) {
+          debugPrint('[TableDebugLogger] copy error: $e');
+        }
+      }
+      return count;
     } catch (e) {
       debugPrint('[TableDebugLogger] copyToDownloads error: $e');
-      return null;
+      return 0;
     }
   }
 
