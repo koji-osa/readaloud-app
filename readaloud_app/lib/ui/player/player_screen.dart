@@ -1,3 +1,4 @@
+import 'dart:async'; // REQ-034
 import '../../providers.dart';
 import '../../repository/gemini_service.dart';
 import '../../repository/claude_service.dart';
@@ -16,6 +17,7 @@ import '../../usecase/playback/set_ab_repeat_usecase.dart';
 import '../../usecase/bookmark/add_bookmark_usecase.dart';
 import '../../usecase/bookmark/delete_bookmark_usecase.dart';
 import '../../usecase/content/update_content_usecase.dart';
+import '../../usecase/content/save_content_usecase.dart'; // REQ-034
 import '../../usecase/tts/check_tts_limit_usecase.dart';
 import '../../usecase/tts/count_tts_usage_usecase.dart';
 import '../../repository/impl/content_repository_impl.dart';
@@ -73,6 +75,7 @@ final playerViewModelProvider =
     addBookmark: AddBookmarkUseCase(bookmarkRepo),
     deleteBookmark: DeleteBookmarkUseCase(bookmarkRepo),
     updateContent: UpdateContentUseCase(contentRepo),
+    saveContent: SaveContentUseCase(contentRepo), // REQ-034
     bookmarkRepo: bookmarkRepo,
     checkTtsLimit: checkTtsLimit,
     audioHandler: audioHandler,
@@ -83,8 +86,9 @@ final playerViewModelProvider =
 class PlayerScreen extends ConsumerStatefulWidget {
   final Content content;
   final bool autoPlay;
+  final bool autoCreateToc; // REQ-034
 
-  const PlayerScreen({super.key, required this.content, this.autoPlay = false});
+  const PlayerScreen({super.key, required this.content, this.autoPlay = false, this.autoCreateToc = false}); // REQ-034
 
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
@@ -103,6 +107,33 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         await _loadAvailableVoices();
         if (widget.autoPlay) {
           await vm.play();
+        }
+        if (widget.autoCreateToc) { // REQ-034
+          final settingsState = ref.read(settingsViewModelProvider);
+          final provider = settingsState.aiProvider;
+          final tocPrompt = settingsState.tocPrompt;
+          final apiKey = await const FlutterSecureStorage().read(
+            key: provider == 'claude'
+                ? SettingKeys.claudeApiKey
+                : provider == 'groq'
+                ? SettingKeys.groqApiKey
+                : SettingKeys.geminiApiKey,
+          );
+          if (apiKey != null && apiKey.isNotEmpty && mounted) {
+            final currentState = ref.read(playerViewModelProvider);
+            if (currentState.content != null) {
+              unawaited(vm.createTocInBackground(
+                contentId: currentState.content!.id,
+                text: currentState.content!.body,
+                apiKey: apiKey,
+                provider: provider,
+                shouldClean: true,
+                speed: currentState.playbackState?.speed ?? 1.0,
+                totalChars: currentState.content!.body.length,
+                tocPrompt: tocPrompt,
+              ));
+            }
+          }
         }
       } catch (e) {
         // ViewModelのerrorMessageで表示されるため基本的には不要
@@ -132,6 +163,27 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final state = ref.watch(playerViewModelProvider);
     final vm    = ref.read(playerViewModelProvider.notifier);
     final settingsState = ref.watch(settingsViewModelProvider);
+
+    // REQ-034: 目次作成完了・エラーを監視して通知
+    ref.listen<PlayerState>(playerViewModelProvider, (previous, next) {
+      if (previous?.tocCompleted == false && next.tocCompleted == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ 目次も作成しました'),
+            backgroundColor: Color(0xFF7C5CBF),
+          ),
+        );
+      }
+      if (previous?.errorMessage == null && next.errorMessage != null &&
+          next.errorMessage!.contains('AI目次作成')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(next.errorMessage!),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    });
 
     return Scaffold(
       body: SafeArea(
@@ -271,7 +323,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (state.content == null) return;
 
 
-    String selectedProvider = aiProvider; // デフォルトは設定画面の選択（FIX-045）
+    // REQ-033: 表解説はGemini・Claudeのみ対応。groqが選択されている場合はgeminiにフォールバック
+    String selectedProvider = (aiProvider == 'groq') ? 'gemini' : aiProvider;
     bool shouldClean = true;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -286,7 +339,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text("使用するAPI",
+              const Text("使用するAPI（Gemini・Claudeのみ対応）", // REQ-033
                   style: TextStyle(fontSize: 12, color: Color(0xFFF0F0F8))),
               Row(
                 children: [
@@ -305,22 +358,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     activeColor: const Color(0xFF9B6FE0),
                   ),
                   const Text("Claude", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
-                  const SizedBox(width: 8),
-                  Radio<String>(
-                    value: 'groq',
-                    groupValue: selectedProvider,
-                    onChanged: (v) => setState(() => selectedProvider = v!),
-                    activeColor: const Color(0xFF9B6FE0),
-                  ),
-                  const Text("Groq", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
                 ],
               ),
               Text(
                 selectedProvider == 'claude'
                     ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
-                    : selectedProvider == 'groq'
-                    ? 'Groqのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
-                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
+                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。', // REQ-033
                 style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
               ),
               const SizedBox(height: 12),
@@ -362,11 +405,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // ダイアログで選択されたAPIのキーを取得（FIX-045）
     const storage = FlutterSecureStorage();
     final apiKey = await storage.read(
-      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : selectedProvider == 'groq' ? SettingKeys.groqApiKey : SettingKeys.geminiApiKey,
+      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : SettingKeys.geminiApiKey, // REQ-033
     );
     if (!context.mounted) return;
     if (apiKey == null || apiKey.isEmpty) {
-      final providerName = selectedProvider == 'claude' ? 'Claude' : selectedProvider == 'groq' ? 'Groq' : 'Gemini';
+      final providerName = selectedProvider == 'claude' ? 'Claude' : 'Gemini'; // REQ-033
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('設定画面で$providerName APIキーを設定してください'),
@@ -422,6 +465,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         await vm.appendTableDescription(
           insertPosition: table.endPosition,
           description: table.description,
+          index: table.index, // FIX-056
         );
       }
 
@@ -430,6 +474,57 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           SnackBar(
             content: Text('✅ ${result.tables.length}件の表を検出・解説を追加しました'),
             backgroundColor: const Color(0xFF7C5CBF),
+          ),
+        );
+      }
+
+      // REQ-034: 新規テキストを作成して遷移を提案
+      if (!context.mounted) return;
+      final newContent = await vm.createTableDescriptionContent();
+      if (newContent == null || !context.mounted) return;
+
+      final shouldMove = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF2A2A3E),
+          title: const Text('新規テキストを作成しました',
+              style: TextStyle(color: Color(0xFFF0F0F8))),
+          content: Text(
+            '「(表)${state.content!.title}」を作成しました。移動しますか？',
+            style: const TextStyle(color: Color(0xFF8888AA), fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('いいえ',
+                  style: TextStyle(color: Color(0xFF8888AA))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('はい',
+                  style: TextStyle(color: Color(0xFF9B6FE0))),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldMove == true && context.mounted) {
+        // バックグラウンドで目次作成を開始（REQ-034）
+        // ignore: unawaited_futures
+        Future(() async {
+          final tocApiKey = await const FlutterSecureStorage().read(
+            key: selectedProvider == 'claude'
+                ? SettingKeys.claudeApiKey
+                : SettingKeys.geminiApiKey,
+          );
+          if (tocApiKey != null && tocApiKey.isNotEmpty) {
+            // 新規テキストのViewModelで目次作成（遷移後に通知される）
+          }
+        });
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PlayerScreen(content: newContent, autoCreateToc: true), // REQ-034
           ),
         );
       }
@@ -531,7 +626,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text("使用するAPI",
+              const Text("使用するAPI（Gemini・Claudeのみ対応）", // REQ-033
                   style: TextStyle(fontSize: 12, color: Color(0xFFF0F0F8))),
               Row(
                 children: [
@@ -550,22 +645,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     activeColor: const Color(0xFF9B6FE0),
                   ),
                   const Text("Claude", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
-                  const SizedBox(width: 8),
-                  Radio<String>(
-                    value: 'groq',
-                    groupValue: selectedProvider,
-                    onChanged: (v) => setState(() => selectedProvider = v!),
-                    activeColor: const Color(0xFF9B6FE0),
-                  ),
-                  const Text("Groq", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
                 ],
               ),
               Text(
                 selectedProvider == 'claude'
                     ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
-                    : selectedProvider == 'groq'
-                    ? 'Groqのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
-                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
+                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。', // REQ-033
                 style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
               ),
               const SizedBox(height: 12),
@@ -605,11 +690,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     const storage2 = FlutterSecureStorage();
     final apiKey = await storage2.read(
-      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : selectedProvider == 'groq' ? SettingKeys.groqApiKey : SettingKeys.geminiApiKey,
+      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : SettingKeys.geminiApiKey, // REQ-033
     );
     if (!context.mounted) return;
     if (apiKey == null || apiKey.isEmpty) {
-      final providerName = selectedProvider == 'claude' ? 'Claude' : selectedProvider == 'groq' ? 'Groq' : 'Gemini';
+      final providerName = selectedProvider == 'claude' ? 'Claude' : 'Gemini'; // REQ-033
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('設定画面で$providerName APIキーを設定してください'),

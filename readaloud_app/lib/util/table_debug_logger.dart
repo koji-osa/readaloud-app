@@ -109,6 +109,32 @@ class TableDebugLogger {
     await _flush();
   }
 
+  /// 表解説挿入処理のログ（FIX-056）
+  void logInsert({
+    required int index,
+    required int insertPosition,
+    required int bodyLengthBefore,
+  }) {
+    if (!_isActive) return;
+    _append('[挿入開始] 表$index 挿入位置=$insertPosition 挿入前文字数=$bodyLengthBefore');
+  }
+
+  void logInsertComplete({
+    required int index,
+    required int bodyLengthAfter,
+  }) {
+    if (!_isActive) return;
+    _append('[挿入完了] 表$index 挿入後文字数=$bodyLengthAfter');
+  }
+
+  void logInsertError({
+    required int index,
+    required String error,
+  }) {
+    if (!_isActive) return;
+    _append('[挿入エラー] 表$index エラー=$error');
+  }
+
   /// バッファをファイルに書き出す
   Future<void> _flush() async {
     if (_logFile == null) return;

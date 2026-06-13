@@ -210,7 +210,7 @@ class TableAnalysisService {
       },
       options: Options(
         headers: {'Content-Type': 'application/json'},
-        receiveTimeout: const Duration(seconds: 120),
+        receiveTimeout: const Duration(seconds: 300), // FIX-046
         connectTimeout: const Duration(seconds: 30),
       ),
     );
@@ -233,7 +233,7 @@ class TableAnalysisService {
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
         },
-        receiveTimeout: const Duration(seconds: 120),
+        receiveTimeout: const Duration(seconds: 300), // FIX-046
         connectTimeout: const Duration(seconds: 30),
       ),
     );
@@ -261,14 +261,15 @@ class TableAnalysisService {
 - 説明文は「表情報の解説：〇〇〇」の形式で記載する
 - excerpt_startは表の最初の行・ヘッダー行の冒頭25文字とする（FIX-053）
 - excerpt_endは表の最後の行の末尾25文字とする（表の後の説明文・考察・本文は含めない）（FIX-053）
-- 表や数値データが見つからない場合：{"result": "表なし"} のみ返す
-- 必ずJSON形式のみで返す（説明文・マークダウン記号不要）
+- 表や数値データが見つからない場合：[{"result": "表なし"}] のみ返す（FIX-056）
+- 返答は必ず角カッコ（[]）で始まる配列形式のJSONのみとする（FIX-056）
+- オブジェクト形式（{}で始まる）・説明文・マークダウン記号は一切不要（FIX-056）
+- 配列の各要素は必ず index, excerpt_start, excerpt_end, description のキーを持つこと（FIX-056）
 
 JSONフォーマット：
 [
   {
     "index": 1,
-    "position": 150,
     "excerpt_start": "表の冒頭25文字",
     "excerpt_end": "表の末尾25文字",
     "description": "表情報の解説：〇〇〇"

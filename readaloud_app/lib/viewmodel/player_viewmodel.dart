@@ -17,7 +17,12 @@ import '../usecase/playback/set_ab_repeat_usecase.dart';
 import '../usecase/bookmark/add_bookmark_usecase.dart';
 import '../usecase/bookmark/delete_bookmark_usecase.dart';
 import '../usecase/content/update_content_usecase.dart';
+import '../usecase/content/save_content_usecase.dart'; // REQ-034
+import '../repository/gemini_service.dart'; // REQ-034
+import '../repository/claude_service.dart'; // REQ-034
+import '../repository/groq_service.dart'; // REQ-034
 import '../usecase/tts/check_tts_limit_usecase.dart';
+import '../util/table_debug_logger.dart'; // FIX-056
 
 class PlayerState {
   final Content? content;
@@ -29,6 +34,8 @@ class PlayerState {
   final TtsLimitStatus ttsLimitStatus;
   final bool isLoading;
   final String? errorMessage;
+  final bool tocCreating; // REQ-034
+  final bool tocCompleted; // REQ-034
 
   PlayerState({
     this.content,
@@ -40,6 +47,8 @@ class PlayerState {
     this.ttsLimitStatus = TtsLimitStatus.normal,
     this.isLoading = false,
     this.errorMessage,
+    this.tocCreating = false, // REQ-034
+    this.tocCompleted = false, // REQ-034
   });
 
   PlayerState copyWith({
@@ -52,6 +61,8 @@ class PlayerState {
     TtsLimitStatus? ttsLimitStatus,
     bool? isLoading,
     String? errorMessage,
+    bool? tocCreating, // REQ-034
+    bool? tocCompleted, // REQ-034
   }) =>
       PlayerState(
         content: content ?? this.content,
@@ -63,6 +74,8 @@ class PlayerState {
         ttsLimitStatus: ttsLimitStatus ?? this.ttsLimitStatus,
         isLoading: isLoading ?? this.isLoading,
         errorMessage: errorMessage,
+        tocCreating: tocCreating ?? this.tocCreating, // REQ-034
+        tocCompleted: tocCompleted ?? this.tocCompleted, // REQ-034
       );
 }
 
@@ -74,6 +87,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final AddBookmarkUseCase _addBookmark;
   final DeleteBookmarkUseCase _deleteBookmark;
   final UpdateContentUseCase _updateContent;
+  final SaveContentUseCase _saveContent; // REQ-034
   // ignore: unused_field
   final CheckTtsLimitUseCase _checkTtsLimit;
   final TtsAudioHandler _audioHandler;
@@ -91,6 +105,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required AddBookmarkUseCase addBookmark,
     required DeleteBookmarkUseCase deleteBookmark,
     required UpdateContentUseCase updateContent,
+    required SaveContentUseCase saveContent, // REQ-034
     required CheckTtsLimitUseCase checkTtsLimit,
     required TtsAudioHandler audioHandler,
     required PlaybackRepository playbackRepo,
@@ -103,6 +118,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _addBookmark = addBookmark,
         _deleteBookmark = deleteBookmark,
         _updateContent = updateContent,
+        _saveContent = saveContent, // REQ-034
         _checkTtsLimit = checkTtsLimit,
         _audioHandler = audioHandler,
         _playbackRepo = playbackRepo,
@@ -440,8 +456,14 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   Future<void> appendTableDescription({
     required int insertPosition,
     required String description,
+    int index = 0, // FIX-056
   }) async {
     if (state.content == null) return;
+    TableDebugLogger.instance.logInsert( // FIX-056
+      index: index, // FIX-056
+      insertPosition: insertPosition, // FIX-056
+      bodyLengthBefore: state.content!.body.length, // FIX-056
+    ); // FIX-056
     try {
       final currentBody = state.content!.body;
       final newBody = currentBody.substring(0, insertPosition) +
@@ -454,7 +476,15 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       state = state.copyWith(
         content: state.content!.copyWith(body: newBody),
       );
+      TableDebugLogger.instance.logInsertComplete( // FIX-056
+        index: index, // FIX-056
+        bodyLengthAfter: newBody.length, // FIX-056
+      ); // FIX-056
     } catch (e) {
+      TableDebugLogger.instance.logInsertError( // FIX-056
+        index: index, // FIX-056
+        error: e.toString(), // FIX-056
+      ); // FIX-056
       state = state.copyWith(errorMessage: 'テキストの更新に失敗しました: $e');
     }
   }
@@ -532,6 +562,93 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         progressPct: progressPct,
       ),
     );
+  }
+
+  /// 表解説付き新規テキストを作成する（REQ-034）
+  Future<Content?> createTableDescriptionContent() async {
+    if (state.content == null) return null;
+    try {
+      final original = state.content!;
+      final newTitle = '(表)${original.title}';
+      final newContent = await _saveContent.execute(
+        body: original.body,
+        title: newTitle,
+        sourceType: original.sourceType,
+        sourceUrl: original.sourceUrl,
+        sourceFilename: original.sourceFilename,
+      );
+      return newContent;
+    } catch (e) {
+      state = state.copyWith(errorMessage: '新規テキストの作成に失敗しました: $e');
+      return null;
+    }
+  }
+
+  /// バックグラウンドで目次作成を実行する（REQ-034）
+  Future<void> createTocInBackground({
+    required String contentId,
+    required String text,
+    required String apiKey,
+    required String provider,
+    required bool shouldClean,
+    required double speed,
+    required int totalChars,
+    required String tocPrompt,
+  }) async {
+    state = state.copyWith(tocCreating: true, tocCompleted: false); // REQ-034
+    try {
+      final List<dynamic> bookmarks;
+      if (provider == 'groq') {
+        bookmarks = await GroqService().analyzeAndCreateBookmarks(
+          contentId: contentId,
+          text: text,
+          apiKey: apiKey,
+          shouldClean: shouldClean,
+          speed: speed,
+          totalChars: totalChars,
+          customPrompt: tocPrompt,
+        );
+      } else if (provider == 'claude') {
+        bookmarks = await ClaudeService().analyzeAndCreateBookmarks(
+          contentId: contentId,
+          text: text,
+          apiKey: apiKey,
+          shouldClean: shouldClean,
+          speed: speed,
+          totalChars: totalChars,
+          customPrompt: tocPrompt,
+        );
+      } else {
+        bookmarks = await GeminiService().analyzeAndCreateBookmarks(
+          contentId: contentId,
+          text: text,
+          apiKey: apiKey,
+          shouldClean: shouldClean,
+          speed: speed,
+          totalChars: totalChars,
+          customPrompt: tocPrompt,
+        );
+      }
+      for (final bookmark in bookmarks) {
+        await addBookmarkDirect(bookmark);
+      }
+      state = state.copyWith(tocCreating: false, tocCompleted: true); // REQ-034
+    } catch (e) {
+      state = state.copyWith(
+        tocCreating: false,
+        tocCompleted: false,
+        errorMessage: _tocErrorMessage(e),
+      ); // REQ-034
+    }
+  }
+
+  String _tocErrorMessage(dynamic e) {
+    final msg = e.toString();
+    if (msg.contains('503')) return 'AI目次作成：サーバーが混雑しています。';
+    if (msg.contains('401') || msg.contains('403')) return 'AI目次作成：APIキーが無効です。';
+    if (msg.contains('429')) return 'AI目次作成：APIの利用制限に達しました。';
+    if (msg.contains('timeout')) return 'AI目次作成：通信がタイムアウトしました。';
+    return 'AI目次作成に失敗しました。';
   }
 
   void clearError() => state = state.copyWith(errorMessage: null);
