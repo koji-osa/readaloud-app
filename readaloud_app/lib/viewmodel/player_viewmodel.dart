@@ -439,9 +439,19 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   Future<void> addBookmark(String? label) async {
     if (state.content == null) return;
     try {
+      // FIX-063: 前の句読点直後をpositionにする
+      final body = state.content!.body;
+      final pos = state.highlightPosition;
+      int prevBreak = pos;
+      while (prevBreak > 0) {
+        final ch = body[prevBreak - 1];
+        if (ch == '。' || ch == '、' || ch == '\n') break;
+        prevBreak--;
+      }
+      final adjustedPos = prevBreak;
       final bookmark = await _addBookmark.execute(
         contentId: state.content!.id,
-        position: state.highlightPosition,
+        position: adjustedPos, // FIX-063
         label: label,
       );
       state = state.copyWith(
@@ -457,6 +467,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required int insertPosition,
     required String description,
     int index = 0, // FIX-056
+    int startPosition = 0, // FIX-062
   }) async {
     if (state.content == null) return;
     TableDebugLogger.instance.logInsert( // FIX-056
@@ -466,9 +477,19 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     ); // FIX-056
     try {
       final currentBody = state.content!.body;
-      final newBody = currentBody.substring(0, insertPosition) +
-          '\n\n$description\n\n以上、表の解説終了。\n\n' + // FIX-052
+      // REQ-036: 表解説テキストに番号付け
+      final numberedDescription = description.replaceFirst(
+          '表情報の解説：', '表${index}の解説：'); // REQ-036
+      final numberedEnd = '以上、表${index}の解説終了。'; // REQ-036
+      // ① endPosに解説を挿入（FIX-052・REQ-036）
+      final bodyAfterDesc = currentBody.substring(0, insertPosition) +
+          '\n\n$numberedDescription\n\n$numberedEnd\n\n' +
           currentBody.substring(insertPosition);
+      // ② startPosに表開始テキストを挿入（FIX-062）
+      final tableStartText = '\n\n表${index}開始\n\n';
+      final newBody = bodyAfterDesc.substring(0, startPosition) +
+          tableStartText +
+          bodyAfterDesc.substring(startPosition);
       await _updateContent.execute(
         id: state.content!.id,
         body: newBody,
@@ -577,6 +598,39 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         sourceUrl: original.sourceUrl,
         sourceFilename: original.sourceFilename,
       );
+
+      // REQ-036: 表目次を新規テキストに引き継ぎ
+      final body = original.body;
+      final safeSpeed = state.playbackState?.speed ?? 1.0;
+      final safeTotalChars = body.length > 0 ? body.length : 1;
+      int tableIndex = 1;
+      while (true) {
+        final searchText = '表${tableIndex}開始';
+        final pos = body.indexOf(searchText);
+        if (pos == -1) break;
+        final totalSecs = safeTotalChars / (5.0 * safeSpeed);
+        final currentSecs = (totalSecs * pos / safeTotalChars).round();
+        final minutes = currentSecs ~/ 60;
+        final seconds = currentSecs % 60;
+        final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
+        final excerptStart = pos + searchText.length;
+        final excerptEnd = excerptStart + 25;
+        final excerptTrimmed = body.length > excerptStart
+            ? body.substring(excerptStart,
+                body.length > excerptEnd ? excerptEnd : body.length).trim()
+            : '';
+        final label = '[$searchText] $timeLabel $excerptTrimmed';
+        final bookmark = Bookmark(
+          contentId: newContent.id,
+          position: pos,
+          label: label.length > Bookmark.maxLabelLength
+              ? label.substring(0, Bookmark.maxLabelLength)
+              : label,
+        );
+        await _bookmarkRepo.save(bookmark);
+        tableIndex++;
+      }
+
       return newContent;
     } catch (e) {
       state = state.copyWith(errorMessage: '新規テキストの作成に失敗しました: $e');

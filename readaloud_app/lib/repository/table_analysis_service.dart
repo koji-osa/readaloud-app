@@ -132,8 +132,8 @@ class TableAnalysisService {
       final minutes = currentSecs ~/ 60;
       final seconds = currentSecs % 60;
       final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
-      final excerptTrimmed = excerptStart.length > 25
-          ? excerptStart.substring(0, 25)
+      final excerptTrimmed = excerptStart.length > 30 // FIX-063
+          ? excerptStart.substring(0, 30)
           : excerptStart;
       final rawLabel = '[表$index] $timeLabel $excerptTrimmed';
       final label = rawLabel.length > Bookmark.maxLabelLength
@@ -259,8 +259,8 @@ class TableAnalysisService {
 - 表や数値データが見つかった場合：その内容・意味・特徴を説明する（最大3000文字）
 - 複数の表がある場合：それぞれ番号をつけて説明する
 - 説明文は「表情報の解説：〇〇〇」の形式で記載する
-- excerpt_startは表の最初の行・ヘッダー行の冒頭25文字とする（FIX-053）
-- excerpt_endは表の最後の行の末尾25文字とする（表の後の説明文・考察・本文は含めない）（FIX-053）
+- excerpt_startは表の最初の行・ヘッダー行の冒頭25文字とする（Markdown記号・パイプ等を原文のまま含めること）（FIX-059）
+- excerpt_endは表の最後の行の末尾15文字とする（表の後の説明文・考察・本文は含めない）（Markdown記号・パイプ等を原文のまま含めること）（FIX-059）
 - 表や数値データが見つからない場合：[{"result": "表なし"}] のみ返す（FIX-056）
 - 返答は必ず角カッコ（[]）で始まる配列形式のJSONのみとする（FIX-056）
 - オブジェクト形式（{}で始まる）・説明文・マークダウン記号は一切不要（FIX-056）
@@ -270,8 +270,8 @@ JSONフォーマット：
 [
   {
     "index": 1,
-    "excerpt_start": "表の冒頭25文字",
-    "excerpt_end": "表の末尾25文字",
+    "excerpt_start": "表の冒頭25文字（Markdown原文）",
+    "excerpt_end": "表の末尾15文字（Markdown原文）",
     "description": "表情報の解説：〇〇〇"
   }
 ]

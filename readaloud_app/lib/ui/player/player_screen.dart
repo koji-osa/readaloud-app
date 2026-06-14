@@ -466,6 +466,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           insertPosition: table.endPosition,
           description: table.description,
           index: table.index, // FIX-056
+          startPosition: table.startPosition, // FIX-062
         );
       }
 
@@ -626,7 +627,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text("使用するAPI（Gemini・Claudeのみ対応）", // REQ-033
+              const Text("使用するAPI", // FIX-058
                   style: TextStyle(fontSize: 12, color: Color(0xFFF0F0F8))),
               Row(
                 children: [
@@ -645,12 +646,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     activeColor: const Color(0xFF9B6FE0),
                   ),
                   const Text("Claude", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                  const SizedBox(width: 8),
+                  Radio<String>(
+                    value: 'groq',
+                    groupValue: selectedProvider,
+                    onChanged: (v) => setState(() => selectedProvider = v!),
+                    activeColor: const Color(0xFF9B6FE0),
+                  ),
+                  const Text("Groq", style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
                 ],
               ),
               Text(
                 selectedProvider == 'claude'
                     ? 'Anthropicのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。'
-                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。', // REQ-033
+                    : selectedProvider == 'groq'
+                    ? 'Groqのサーバーに送信されます。個人情報・機密情報を含むテキストへの使用はご注意ください。' // FIX-058
+                    : 'GoogleのAIトレーニングに使用される場合があります。個人情報・機密情報を含むテキストへの使用はご注意ください。',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
               ),
               const SizedBox(height: 12),
@@ -690,11 +701,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     const storage2 = FlutterSecureStorage();
     final apiKey = await storage2.read(
-      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : SettingKeys.geminiApiKey, // REQ-033
+      key: selectedProvider == 'claude' ? SettingKeys.claudeApiKey : selectedProvider == 'groq' ? SettingKeys.groqApiKey : SettingKeys.geminiApiKey, // FIX-058
     );
     if (!context.mounted) return;
     if (apiKey == null || apiKey.isEmpty) {
-      final providerName = selectedProvider == 'claude' ? 'Claude' : 'Gemini'; // REQ-033
+      final providerName = selectedProvider == 'claude' ? 'Claude' : selectedProvider == 'groq' ? 'Groq' : 'Gemini'; // FIX-058
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('設定画面で$providerName APIキーを設定してください'),
@@ -788,7 +799,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
     final now = DateTime.now();
     final dateLabel = '${now.month}/${now.day} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-    final controller = TextEditingController(text: '$timeLabel $dateLabel');
+    // FIX-063: 現在位置のテキスト冒頭10文字をラベルに追加
+    final body2 = state.content?.body ?? '';
+    final pos2 = state.highlightPosition;
+    int prevBreak2 = pos2;
+    while (prevBreak2 > 0) {
+      final ch = body2[prevBreak2 - 1];
+      if (ch == '。' || ch == '、' || ch == '\n') break;
+      prevBreak2--;
+    }
+    final excerpt2 = body2.isEmpty ? '' : body2.substring(
+        prevBreak2, (prevBreak2 + 10).clamp(0, body2.length)).trim();
+    final controller = TextEditingController(
+        text: excerpt2.isEmpty
+            ? '$timeLabel $dateLabel'
+            : '$timeLabel $dateLabel $excerpt2');
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(

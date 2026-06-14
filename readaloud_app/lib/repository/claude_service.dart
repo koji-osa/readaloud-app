@@ -80,7 +80,7 @@ class ClaudeService {
       final seconds = currentSecs % 60;
       final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
       final excerptTrimmed =
-          excerpt.length > 25 ? excerpt.substring(0, 25) : excerpt;
+          excerpt.length > 30 ? excerpt.substring(0, 30) : excerpt; // FIX-063
       final rawLabel = '[目次] $timeLabel $excerptTrimmed';
       final label = rawLabel.length > Bookmark.maxLabelLength
           ? rawLabel.substring(0, Bookmark.maxLabelLength)
@@ -109,6 +109,7 @@ class ClaudeService {
 - アルファベット（A. B. C.）
 - ローマ数字（Ⅰ Ⅱ Ⅲ）
 - 改行+字下げによる段落区切り
+- 表の区切り（例：表1開始・表1の解説：）（REQ-037）
 
 ルール：
 - テキストが1,000文字未満の場合は3箇所程度
