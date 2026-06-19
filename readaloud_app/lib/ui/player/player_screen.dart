@@ -18,6 +18,7 @@ import '../../usecase/bookmark/add_bookmark_usecase.dart';
 import '../../usecase/bookmark/delete_bookmark_usecase.dart';
 import '../../usecase/content/update_content_usecase.dart';
 import '../../usecase/content/save_content_usecase.dart'; // REQ-034
+import '../home/home_screen.dart'; // FIX-066
 import '../../usecase/tts/check_tts_limit_usecase.dart';
 import '../../usecase/tts/count_tts_usage_usecase.dart';
 import '../../repository/impl/content_repository_impl.dart';
@@ -87,8 +88,9 @@ class PlayerScreen extends ConsumerStatefulWidget {
   final Content content;
   final bool autoPlay;
   final bool autoCreateToc; // REQ-034
+  final String? tocProvider; // FIX-065
 
-  const PlayerScreen({super.key, required this.content, this.autoPlay = false, this.autoCreateToc = false}); // REQ-034
+  const PlayerScreen({super.key, required this.content, this.autoPlay = false, this.autoCreateToc = false, this.tocProvider}); // REQ-034 FIX-065
 
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
@@ -110,7 +112,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         }
         if (widget.autoCreateToc) { // REQ-034
           final settingsState = ref.read(settingsViewModelProvider);
-          final provider = settingsState.aiProvider;
+          final provider = widget.tocProvider ?? settingsState.aiProvider; // FIX-065
           final tocPrompt = settingsState.tocPrompt;
           final apiKey = await const FlutterSecureStorage().read(
             key: provider == 'claude'
@@ -325,6 +327,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     // REQ-033: 表解説はGemini・Claudeのみ対応。groqが選択されている場合はgeminiにフォールバック
     String selectedProvider = (aiProvider == 'groq') ? 'gemini' : aiProvider;
+    String selectedTocProvider = aiProvider; // FIX-065
     bool shouldClean = true;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -382,6 +385,41 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     ),
                   ),
                 ],
+              ),
+            const SizedBox(height: 12),
+            const Text('バックグラウンド目次作成のAPI', // FIX-065
+                style: TextStyle(fontSize: 12, color: Color(0xFFF0F0F8))),
+            Row(
+              children: [
+                Radio<String>(
+                  value: 'gemini',
+                  groupValue: selectedTocProvider,
+                  onChanged: (v) => setState(() => selectedTocProvider = v!),
+                  activeColor: const Color(0xFF9B6FE0),
+                ),
+                const Text('Gemini', style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                const SizedBox(width: 8),
+                Radio<String>(
+                  value: 'claude',
+                  groupValue: selectedTocProvider,
+                  onChanged: (v) => setState(() => selectedTocProvider = v!),
+                  activeColor: const Color(0xFF9B6FE0),
+                ),
+                const Text('Claude', style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                const SizedBox(width: 8),
+                Radio<String>(
+                  value: 'groq',
+                  groupValue: selectedTocProvider,
+                  onChanged: (v) => setState(() => selectedTocProvider = v!),
+                  activeColor: const Color(0xFF9B6FE0),
+                ),
+                const Text('Groq', style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+              ],
+            ),
+            if (selectedTocProvider == 'groq')
+              const Text(
+                '※Groqはテキスト量が多い場合にエラーが発生することがあります',
+                style: TextStyle(fontSize: 11, color: Colors.redAccent),
               ),
             ],
           ),
@@ -510,22 +548,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       );
 
       if (shouldMove == true && context.mounted) {
-        // バックグラウンドで目次作成を開始（REQ-034）
-        // ignore: unawaited_futures
-        Future(() async {
-          final tocApiKey = await const FlutterSecureStorage().read(
-            key: selectedProvider == 'claude'
-                ? SettingKeys.claudeApiKey
-                : SettingKeys.geminiApiKey,
-          );
-          if (tocApiKey != null && tocApiKey.isNotEmpty) {
-            // 新規テキストのViewModelで目次作成（遷移後に通知される）
-          }
-        });
+        // ホーム画面のコンテンツリストをバックグラウンドで更新（FIX-066）
+        ref.read(contentListViewModelProvider.notifier).loadContents();
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => PlayerScreen(content: newContent, autoCreateToc: true), // REQ-034
+            builder: (_) => PlayerScreen(content: newContent, autoCreateToc: true, tocProvider: selectedTocProvider), // REQ-034 FIX-065
           ),
         );
       }
@@ -607,6 +635,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     if (analysisType == null || !context.mounted) return;
     if (analysisType == 'table') {
+      // FIX-067: 表分析済みチェック（本文に「表1開始」が含まれている場合は中断）
+      if (state.content != null && state.content!.body.contains('表1開始')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('このテキストはすでに表分析済みです'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
       await _showTableAnalysisDialog(context, vm, state, aiProvider, tablePrompt); // REQ-031
       return;
     }

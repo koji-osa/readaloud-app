@@ -61,6 +61,7 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       _tts.setCompletionHandler(() async {
         try {
           if (_isStopped || _isPaused) return;
+          _isResuming = false; // 次チャンクへ進む際にリセット（FIX-064）
           _currentChunkIndex++;
           if (_currentChunkIndex < _chunks.length) {
             await _playChunk(_currentChunkIndex);
@@ -108,9 +109,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
   Future<void> _playChunk(int index) async {
     if (index >= _chunks.length) return;
     final chunk = _chunks[index];
-    // 新チャンク開始時は_isResumingをリセットして通常計算に戻す（FIX-021）
-    _isResuming = false;
-    _currentPosition = chunk.startPosition;
+    // 再開中でない場合のみチャンク先頭を現在位置にセット（FIX-064）
+    if (!_isResuming) {
+      _currentPosition = chunk.startPosition;
+    }
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,
       isPlaying: true,
