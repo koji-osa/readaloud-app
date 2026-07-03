@@ -7,6 +7,7 @@ class BookmarkPanel extends StatefulWidget {
   final Function(String) onDelete;
   final Function(int) onJump;
   final VoidCallback? onAnalyze; // REQ-011
+  final VoidCallback? onCopy; // REQ-046
 
   const BookmarkPanel({
     super.key,
@@ -15,6 +16,7 @@ class BookmarkPanel extends StatefulWidget {
     required this.onDelete,
     required this.onJump,
     this.onAnalyze,
+    this.onCopy,
   });
 
   @override
@@ -58,6 +60,21 @@ class _BookmarkPanelState extends State<BookmarkPanel> {
                 ),
               ),
               const Spacer(),
+              // 目次コピーボタン（REQ-046）
+              GestureDetector(
+                onTap: widget.bookmarks.isEmpty ? null : widget.onCopy,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.copy,
+                    size: 16,
+                    color: widget.bookmarks.isEmpty
+                        ? const Color(0xFF44445A)
+                        : const Color(0xFF8888AA),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
               // 開閉ボタン
               GestureDetector(
                 onTap: () => setState(() => _isExpanded = !_isExpanded),

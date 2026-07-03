@@ -7,6 +7,7 @@ import '../../repository/table_analysis_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../model/setting.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // REQ-045 REQ-046
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../model/content.dart';
 import '../../viewmodel/player_viewmodel.dart';
@@ -275,7 +276,79 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   },
                 ),
               ),
-            // ブックマークパネル（スクロール可能エリア）
+            // コピーボタンエリア（REQ-045・046）
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: widget.content.body));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('テキストをコピーしました'),
+                            backgroundColor: Color(0xFF7C5CBF),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A3E),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF3A3A55)),
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.copy, size: 14, color: Color(0xFF8888AA)),
+                            SizedBox(width: 6),
+                            Text('テキストコピー', style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: state.bookmarks.isEmpty ? null : () {
+                        final text = state.bookmarks
+                            .map((b) => b.label ?? "位置 ${b.position}")
+                            .join('\n');
+                        Clipboard.setData(ClipboardData(text: text));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('目次をコピーしました'),
+                            backgroundColor: Color(0xFF7C5CBF),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A3E),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF3A3A55)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.copy, size: 14, color: state.bookmarks.isEmpty ? const Color(0xFF44445A) : const Color(0xFF8888AA)),
+                            const SizedBox(width: 6),
+                            Text('目次コピー', style: TextStyle(fontSize: 12, color: state.bookmarks.isEmpty ? const Color(0xFF44445A) : const Color(0xFF8888AA))),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // ブックマークパネル（スクロール可能 エリア）
             Expanded(
               child: SingleChildScrollView(
                 child: Padding(
@@ -286,6 +359,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     onDelete: (id) => vm.deleteBookmark(id),
                     onJump: (position) => vm.seekToBookmark(position),
                     onAnalyze: () => _showAnalyzeDialog(context, vm, state, settingsState.aiProvider, settingsState.tocPrompt, settingsState.tablePrompt), // REQ-011
+                    onCopy: state.bookmarks.isEmpty ? null : () {
+                      final text = state.bookmarks
+                          .map((b) => b.label ?? "位置 ${b.position}")
+                          .join('\n');
+                      Clipboard.setData(ClipboardData(text: text));
+                    },
                   ),
                 ),
               ),

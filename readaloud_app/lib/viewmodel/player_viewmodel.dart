@@ -599,38 +599,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         sourceFilename: original.sourceFilename,
       );
 
-      // REQ-036: 表目次を新規テキストに引き継ぎ
-      final body = original.body;
-      final safeSpeed = state.playbackState?.speed ?? 1.0;
-      final safeTotalChars = body.length > 0 ? body.length : 1;
-      int tableIndex = 1;
-      while (true) {
-        final searchText = '表${tableIndex}開始';
-        final pos = body.indexOf(searchText);
-        if (pos == -1) break;
-        final totalSecs = safeTotalChars / (5.0 * safeSpeed);
-        final currentSecs = (totalSecs * pos / safeTotalChars).round();
-        final minutes = currentSecs ~/ 60;
-        final seconds = currentSecs % 60;
-        final timeLabel = '$minutes:${seconds.toString().padLeft(2, '0')}';
-        final excerptStart = pos + searchText.length;
-        final excerptEnd = excerptStart + 25;
-        final excerptTrimmed = body.length > excerptStart
-            ? body.substring(excerptStart,
-                body.length > excerptEnd ? excerptEnd : body.length).trim()
-            : '';
-        final label = '[$searchText] $timeLabel $excerptTrimmed';
-        final bookmark = Bookmark(
-          contentId: newContent.id,
-          position: pos,
-          label: label.length > Bookmark.maxLabelLength
-              ? label.substring(0, Bookmark.maxLabelLength)
-              : label,
-        );
-        await _bookmarkRepo.save(bookmark);
-        tableIndex++;
-      }
-
       return newContent;
     } catch (e) {
       state = state.copyWith(errorMessage: '新規テキストの作成に失敗しました: $e');

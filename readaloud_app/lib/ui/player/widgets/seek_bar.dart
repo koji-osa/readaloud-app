@@ -25,23 +25,6 @@ class SeekBar extends StatelessWidget {
       ),
       child: Column(
         children: [
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              activeTrackColor: const Color(0xFF9B6FE0),
-              inactiveTrackColor: const Color(0xFF323248),
-              thumbColor: const Color(0xFF9B6FE0),
-              overlayColor: const Color(0x299B6FE0),
-              trackHeight: 4,
-              thumbShape:
-                  const RoundSliderThumbShape(enabledThumbRadius: 8),
-            ),
-            child: Slider(
-              value: progress.clamp(0.0, 100.0),
-              min: 0,
-              max: 100,
-              onChanged: onChanged,
-            ),
-          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Row(
@@ -62,6 +45,23 @@ class SeekBar extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: const Color(0xFF9B6FE0),
+              inactiveTrackColor: const Color(0xFF323248),
+              thumbColor: const Color(0xFF9B6FE0),
+              overlayColor: const Color(0x299B6FE0),
+              trackHeight: 4,
+              thumbShape:
+                  const RoundSliderThumbShape(enabledThumbRadius: 8),
+            ),
+            child: Slider(
+              value: progress.clamp(0.0, 100.0),
+              min: 0,
+              max: 100,
+              onChanged: onChanged,
             ),
           ),
         ],
