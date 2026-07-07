@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:openai_dart/openai_dart.dart';
 import '../model/bookmark.dart';
-import '../util/text_cleaner.dart';
 import '../util/table_debug_logger.dart'; // FIX-050
 
 /// REQ-012: 表の自動分析・説明文章作成
@@ -25,7 +24,7 @@ class TableAnalysisService {
       textLength: text.length, // FIX-050
       shouldClean: shouldClean, // FIX-050
     ); // FIX-050
-    final sendText = shouldClean ? TextCleaner.clean(text) : text;
+    final sendText = text; // FIX-071: クリーニング有無に関わらず元テキストを使用
     final prompt = customPrompt.isNotEmpty
         ? '$customPrompt\n\nテキスト：\n$sendText'
         : _buildPrompt(sendText);
