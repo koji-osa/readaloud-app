@@ -4,6 +4,38 @@ import 'package:openai_dart/openai_dart.dart';
 import '../model/bookmark.dart';
 import '../util/table_debug_logger.dart'; // FIX-050
 
+// FIX-071: excerpt_start/excerpt_endに含まれるMarkdown記号(| ** __ ` 行頭の>)の
+// 有無の差を吸収する正規化。excerptの正規化専用。元テキスト(text)には適用しない。
+String sanitizeExcerpt(String text) {
+  var result = text;
+  result = result.replaceAll('|', '');
+  result = result.replaceAll('**', '');
+  result = result.replaceAll('__', '');
+  result = result.replaceAll('`', '');
+  result = result.replaceAll(RegExp(r'^\s*>\s*', multiLine: true), '');
+  result = result.replaceAll('\r\n', '\n');
+  result = result.replaceAll('\r', '\n');
+  result = result.replaceAll(RegExp(r'[ \t]+'), ' ');
+  result = result.replaceAll(RegExp(r'\n+'), '\n');
+  return result.trim();
+}
+
+// FIX-071: 正規化したexcerptから、Markdown記号の有無を許容する正規表現パターンを作る。
+// 元テキスト(text)は一切加工せず、このパターンで直接検索し位置ズレを防ぐ。
+RegExp? buildFlexiblePattern(String excerpt) {
+  final normalized = sanitizeExcerpt(excerpt);
+  if (normalized.isEmpty) return null;
+  const separator = r'[|*`>_\s]*';
+  final escaped = normalized.split('').map(RegExp.escape).join(separator);
+  return RegExp(escaped);
+}
+
+// FIX-071: RegExp.firstMatch()にはstart引数がないため、allMatches(text, start)で代用する。
+RegExpMatch? firstMatchFrom(RegExp pattern, String input, int start) {
+  final matches = pattern.allMatches(input, start);
+  return matches.isEmpty ? null : matches.first;
+}
+
 /// REQ-012: 表の自動分析・説明文章作成
 class TableAnalysisService {
   final Dio _dio = Dio();
@@ -93,14 +125,20 @@ class TableAnalysisService {
 
       if (excerptStart.isEmpty || description.isEmpty) continue;
 
-      final startPos = text.indexOf(excerptStart);
-      if (startPos < 0) continue;
+      final startPattern = buildFlexiblePattern(excerptStart);
+      if (startPattern == null) continue;
+      final startMatch = startPattern.firstMatch(text);
+      if (startMatch == null) continue;
+      final startPos = startMatch.start;
 
       int endPos = startPos;
       if (excerptEnd.isNotEmpty) {
-        final foundEnd = text.indexOf(excerptEnd, startPos);
-        if (foundEnd >= 0) {
-          endPos = foundEnd + excerptEnd.length;
+        final endPattern = buildFlexiblePattern(excerptEnd);
+        if (endPattern != null) {
+          final endMatch = firstMatchFrom(endPattern, text, startPos);
+          if (endMatch != null) {
+            endPos = endMatch.end;
+          }
         }
       }
 
