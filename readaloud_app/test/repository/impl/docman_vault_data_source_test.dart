@@ -125,6 +125,61 @@ void main() {
 
       expect(() => dataSource.readFile(entry), throwsStateError);
     });
+
+    test(
+      'listEntries returns entries sorted by relativePath regardless of '
+      'the order listChildren() returns them in',
+      () async {
+        // listChildren()がSAFプロバイダ依存の非決定的な順序で返した場合を想定し、
+        // ディレクトリ・ファイルをアルファベット順とは逆順に並べたfakeを組む。
+        final zNote = _FakeDocmanNode(
+          uri: 'content://vault/root2/zeta.md',
+          name: 'zeta.md',
+          isDirectory: false,
+        );
+        final bNoteInSub = _FakeDocmanNode(
+          uri: 'content://vault/root2/sub/beta.md',
+          name: 'beta.md',
+          isDirectory: false,
+        );
+        final subDir = _FakeDocmanNode(
+          uri: 'content://vault/root2/sub',
+          name: 'sub',
+          isDirectory: true,
+          children: [bNoteInSub],
+        );
+        final aNote = _FakeDocmanNode(
+          uri: 'content://vault/root2/alpha.md',
+          name: 'alpha.md',
+          isDirectory: false,
+        );
+        final root2 = _FakeDocmanNode(
+          uri: 'content://vault/root2',
+          name: 'root2',
+          isDirectory: true,
+          // 意図的にrelativePathの昇順とは異なる順序で並べる。
+          children: [zNote, subDir, aNote],
+        );
+
+        final unsortedDataSource = DocmanVaultDataSource(
+          resolver: (uri) async => {
+            root2.uri: root2,
+            zNote.uri: zNote,
+            subDir.uri: subDir,
+            bNoteInSub.uri: bNoteInSub,
+            aNote.uri: aNote,
+          }[uri],
+        );
+
+        final entries =
+            await unsortedDataSource.listEntries('content://vault/root2');
+
+        expect(
+          entries.map((e) => e.relativePath).toList(),
+          const ['alpha.md', 'sub/beta.md', 'zeta.md'],
+        );
+      },
+    );
   });
 }
 

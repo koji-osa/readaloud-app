@@ -28,7 +28,7 @@ class DocmanVaultDataSource implements VaultDataSource {
 
   final DocmanNodeResolver _resolve;
 
-  static const _markdownExtension = '.md';
+  static const _markdownExtensions = <String>{'.md'};
 
   @override
   Future<List<VaultEntry>> listEntries(String rootUri) async {
@@ -37,6 +37,9 @@ class DocmanVaultDataSource implements VaultDataSource {
 
     final entries = <VaultEntry>[];
     await _collect(root, '', entries);
+    // docmanのlistDocuments()の順序はAndroidのSAFプロバイダ依存で非決定的なため、
+    // relativePathで明示的にソートする。
+    entries.sort((a, b) => a.relativePath.compareTo(b.relativePath));
     return entries;
   }
 
@@ -51,7 +54,8 @@ class DocmanVaultDataSource implements VaultDataSource {
           relativeDir.isEmpty ? child.name : '$relativeDir/${child.name}';
       if (child.isDirectory) {
         await _collect(child, relativePath, entries);
-      } else if (child.name.toLowerCase().endsWith(_markdownExtension)) {
+      } else if (_markdownExtensions
+          .any((ext) => child.name.toLowerCase().endsWith(ext))) {
         entries.add(
           VaultEntry(
             uri: child.uri,
