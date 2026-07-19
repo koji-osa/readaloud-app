@@ -36,7 +36,8 @@ class DocmanVaultDataSource implements VaultDataSource {
     if (root == null) return [];
 
     final entries = <VaultEntry>[];
-    await _collect(root, '', entries);
+    final visited = <String>{};
+    await _collect(root, '', entries, visited);
     // docmanのlistDocuments()の順序はAndroidのSAFプロバイダ依存で非決定的なため、
     // relativePathで明示的にソートする。
     entries.sort((a, b) => a.relativePath.compareTo(b.relativePath));
@@ -47,13 +48,18 @@ class DocmanVaultDataSource implements VaultDataSource {
     DocmanNode dir,
     String relativeDir,
     List<VaultEntry> entries,
+    Set<String> visited,
   ) async {
+    // シンボリックリンク等でディレクトリ構造が循環している場合に
+    // 無限再帰へ陥るのを防ぐ。
+    if (!visited.add(dir.uri)) return;
+
     final children = await dir.listChildren();
     for (final child in children) {
       final relativePath =
           relativeDir.isEmpty ? child.name : '$relativeDir/${child.name}';
       if (child.isDirectory) {
-        await _collect(child, relativePath, entries);
+        await _collect(child, relativePath, entries, visited);
       } else if (_markdownExtensions
           .any((ext) => child.name.toLowerCase().endsWith(ext))) {
         entries.add(

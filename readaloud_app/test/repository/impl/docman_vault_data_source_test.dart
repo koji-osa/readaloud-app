@@ -180,6 +180,44 @@ void main() {
         );
       },
     );
+
+    test(
+      'listEntries terminates and does not duplicate entries when a '
+      'directory cycle exists',
+      () async {
+        // loop/
+        //   note.md
+        //   (子ディレクトリとしてrootへ循環参照するself)
+        final loopNote = _FakeDocmanNode(
+          uri: 'content://vault/root3/loop/note.md',
+          name: 'note.md',
+          isDirectory: false,
+        );
+        final loopDir = _FakeDocmanNode(
+          uri: 'content://vault/root3/loop',
+          name: 'loop',
+          isDirectory: true,
+          // children は後から差し込む（自己参照を組むため）。
+        );
+        loopDir.setChildrenForCycleTest([loopNote, loopDir]);
+
+        final unsortedDataSource = DocmanVaultDataSource(
+          resolver: (uri) async => {
+            loopDir.uri: loopDir,
+            loopNote.uri: loopNote,
+          }[uri],
+        );
+
+        final entries =
+            await unsortedDataSource.listEntries('content://vault/root3/loop')
+                .timeout(const Duration(seconds: 5));
+
+        expect(
+          entries.map((e) => e.relativePath).toList(),
+          const ['note.md'],
+        );
+      },
+    );
   });
 }
 
@@ -191,7 +229,7 @@ class _FakeDocmanNode implements DocmanNode {
     required this.isDirectory,
     List<_FakeDocmanNode> children = const [],
     this.content = '',
-  }) : _children = children;
+  }) : _children = List.of(children);
 
   @override
   final String uri;
@@ -204,6 +242,13 @@ class _FakeDocmanNode implements DocmanNode {
 
   final String content;
   final List<_FakeDocmanNode> _children;
+
+  /// 循環参照テストのため、構築後に子ノード（自己参照を含む）を差し込む。
+  void setChildrenForCycleTest(List<_FakeDocmanNode> children) {
+    _children
+      ..clear()
+      ..addAll(children);
+  }
 
   @override
   Future<List<DocmanNode>> listChildren() async => _children;
