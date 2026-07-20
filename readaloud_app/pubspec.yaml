@@ -31,6 +31,8 @@ dependencies:
   # ネットワーク確認
   connectivity_plus: ^6.0.3
   # PDF変換
+  # Obsidian Vault等、SAF経由のディレクトリ取り込み
+  docman: ^1.2.0
   # バックグラウンド再生
   audio_service: ^0.18.17
   # 音声フォーカス管理（電話着信時の自動停止）
