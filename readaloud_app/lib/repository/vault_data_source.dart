@@ -38,6 +38,10 @@ class VaultEntry {
 /// Obsidian専用ではなく、ユーザーがSAFで選択したフォルダ配下から
 /// Markdownファイルを収集・読み込みできる汎用的な抽象とする。
 abstract class VaultDataSource {
+  /// SAFのフォルダ選択ダイアログを表示し、選択されたディレクトリのURIを返す。
+  /// ユーザーがキャンセルした場合はnullを返す。
+  Future<String?> pickDirectory();
+
   /// [rootUri]配下を再帰的に走査し、Markdown(.md)ファイルのみを収集する。
   Future<List<VaultEntry>> listEntries(String rootUri);
 
