@@ -85,10 +85,10 @@ class DocmanVaultDataSource implements VaultDataSource {
   }
 
   @override
-  Future<String> readFile(VaultEntry entry) async {
-    final node = await _resolve(entry.uri);
+  Future<String> readFile(String uri) async {
+    final node = await _resolve(uri);
     if (node == null) {
-      throw StateError('ファイルが見つかりません: ${entry.uri}');
+      throw StateError('ファイルが見つかりません: $uri');
     }
     return node.readAsString();
   }

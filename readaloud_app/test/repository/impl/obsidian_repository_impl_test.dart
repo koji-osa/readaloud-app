@@ -75,8 +75,7 @@ void main() {
 
     group('readNoteContent', () {
       test(
-        'builds a VaultEntry with the given uri and empty '
-        'relativePath/name, then delegates to readFile',
+        'delegates to readFile with the given uri',
         () async {
           vaultDataSource.readFileResult = '# Note';
 
@@ -87,11 +86,7 @@ void main() {
           expect(content, '# Note');
           expect(
             vaultDataSource.readFileCalledWith,
-            const VaultEntry(
-              uri: 'content://vault/root/note.md',
-              relativePath: '',
-              name: '',
-            ),
+            'content://vault/root/note.md',
           );
         },
       );
@@ -114,7 +109,7 @@ class _FakeVaultDataSource implements VaultDataSource {
   String readFileResult = '';
 
   String? listEntriesCalledWith;
-  VaultEntry? readFileCalledWith;
+  String? readFileCalledWith;
 
   @override
   Future<String?> pickDirectory() async => pickDirectoryResult;
@@ -126,8 +121,8 @@ class _FakeVaultDataSource implements VaultDataSource {
   }
 
   @override
-  Future<String> readFile(VaultEntry entry) async {
-    readFileCalledWith = entry;
+  Future<String> readFile(String uri) async {
+    readFileCalledWith = uri;
     return readFileResult;
   }
 }

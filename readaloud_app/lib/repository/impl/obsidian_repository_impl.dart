@@ -30,11 +30,7 @@ class ObsidianRepositoryImpl implements ObsidianRepository {
 
   @override
   Future<String> readNoteContent(String uri) {
-    // SAFのURIは末尾が実際のファイル名と一致する保証がないため推測しない。
-    // relativePath/nameはreadFile()の実装(uriのみ参照)では使用されない
-    // ため、便宜的に空文字列を設定している。
-    final entry = VaultEntry(uri: uri, relativePath: '', name: '');
-    return _vaultDataSource.readFile(entry);
+    return _vaultDataSource.readFile(uri);
   }
 
   @override
