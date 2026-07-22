@@ -17,18 +17,29 @@ abstract class DocmanNode {
 /// URIから[DocmanNode]を解決する関数。
 typedef DocmanNodeResolver = Future<DocmanNode?> Function(String uri);
 
+/// SAFのフォルダ選択ダイアログを表示し、選択されたディレクトリのURIを返す関数。
+/// キャンセル時はnullを返す。
+typedef DocmanDirectoryPicker = Future<String?> Function();
+
 /// SAF (Storage Access Framework) 経由でVault配下の.mdファイルを
 /// 取得するデータソース。
 ///
 /// docmanパッケージへの依存はこのファイル内に閉じ込め、
 /// 他のクラスからdocmanを直接importさせない。
 class DocmanVaultDataSource implements VaultDataSource {
-  DocmanVaultDataSource({DocmanNodeResolver? resolver})
-      : _resolve = resolver ?? _resolveDocmanNode;
+  DocmanVaultDataSource({
+    DocmanNodeResolver? resolver,
+    DocmanDirectoryPicker? directoryPicker,
+  })  : _resolve = resolver ?? _resolveDocmanNode,
+        _pickDirectory = directoryPicker ?? _pickDocmanDirectory;
 
   final DocmanNodeResolver _resolve;
+  final DocmanDirectoryPicker _pickDirectory;
 
   static const _markdownExtensions = <String>{'.md'};
+
+  @override
+  Future<String?> pickDirectory() => _pickDirectory();
 
   @override
   Future<List<VaultEntry>> listEntries(String rootUri) async {
@@ -74,10 +85,10 @@ class DocmanVaultDataSource implements VaultDataSource {
   }
 
   @override
-  Future<String> readFile(VaultEntry entry) async {
-    final node = await _resolve(entry.uri);
+  Future<String> readFile(String uri) async {
+    final node = await _resolve(uri);
     if (node == null) {
-      throw StateError('ファイルが見つかりません: ${entry.uri}');
+      throw StateError('ファイルが見つかりません: $uri');
     }
     return node.readAsString();
   }
@@ -87,6 +98,11 @@ Future<DocmanNode?> _resolveDocmanNode(String uri) async {
   final file = await docman.DocumentFile.fromUri(uri);
   if (file == null) return null;
   return _DocmanFileNode(file);
+}
+
+Future<String?> _pickDocmanDirectory() async {
+  final directory = await docman.DocMan.pick.directory();
+  return directory?.uri;
 }
 
 class _DocmanFileNode implements DocmanNode {

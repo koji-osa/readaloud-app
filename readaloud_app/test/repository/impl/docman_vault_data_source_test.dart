@@ -105,25 +105,18 @@ void main() {
     });
 
     test('readFile resolves the entry uri and returns its content', () async {
-      const entry = VaultEntry(
-        uri: 'content://vault/root/note.md',
-        relativePath: 'note.md',
-        name: 'note.md',
+      final content = await dataSource.readFile(
+        'content://vault/root/note.md',
       );
-
-      final content = await dataSource.readFile(entry);
 
       expect(content, '# Root Note');
     });
 
     test('readFile throws when the file cannot be resolved', () async {
-      const entry = VaultEntry(
-        uri: 'content://vault/missing.md',
-        relativePath: 'missing.md',
-        name: 'missing.md',
+      expect(
+        () => dataSource.readFile('content://vault/missing.md'),
+        throwsStateError,
       );
-
-      expect(() => dataSource.readFile(entry), throwsStateError);
     });
 
     test(
