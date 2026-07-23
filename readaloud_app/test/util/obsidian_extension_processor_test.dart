@@ -88,6 +88,30 @@ void main() {
       expect(result.processedText, '計算結果は  です。');
     });
 
+    test('ブロック数式 \$\$...\$\$ を中身ごと除外する', () {
+      const input = r'説明文$$x + y = z$$続きの説明';
+
+      final result = processor.process(input);
+
+      expect(result.processedText, '説明文続きの説明');
+    });
+
+    test('複数行にまたがるブロック数式 \$\$...\$\$ を中身ごと除外する', () {
+      const input = '説明文\n\$\$\nx + y = z\n\\sum_{i=0}^n i\n\$\$\n続きの説明';
+
+      final result = processor.process(input);
+
+      expect(result.processedText, '説明文\n\n続きの説明');
+    });
+
+    test('ブロック数式とインライン数式が混在してもそれぞれ正しく除外する', () {
+      const input = r'ブロック: $$a + b$$ インライン: $x + y$ 終わり';
+
+      final result = processor.process(input);
+
+      expect(result.processedText, 'ブロック:  インライン:  終わり');
+    });
+
     test('Mermaid図を中身ごと除外する', () {
       const input = '説明\n```mermaid\ngraph TD; A-->B;\n```\n続き';
 
@@ -221,6 +245,25 @@ void main() {
       expect(result.processedText, contains('通常リンク: 普通のノート'));
       expect(result.processedText, contains('注記：これは補足事項です。'));
       expect(result.processedText, isNot(contains('^ref-abc123')));
+    });
+
+    test('extractedMetadataは変更不可（書き込みを試みるとエラーになる）', () {
+      const input = '---\n'
+          'title: Test Note\n'
+          'tags: [foo, bar]\n'
+          '---\n'
+          '本文です。';
+
+      final result = processor.process(input);
+
+      expect(
+        () => result.extractedMetadata['tags'] = ['hacked'],
+        throwsUnsupportedError,
+      );
+      expect(
+        () => result.extractedMetadata['newKey'] = 'value',
+        throwsUnsupportedError,
+      );
     });
   });
 }

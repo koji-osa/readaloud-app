@@ -36,8 +36,13 @@ class ObsidianExtensionProcessor {
   // このパターンで併せて除外する。
   static final _codeBlockPattern = RegExp(r'```[\s\S]*?```');
 
-  // 数式 $...$（改行をまたがない範囲）
-  static final _mathPattern = RegExp(r'\$([^\$\n]+?)\$');
+  // ブロック数式 $$...$$（複数行にまたがる場合あり）。
+  // インライン数式より先に処理しないと、$$のうち片方だけがインライン数式パターンに
+  // 誤ってマッチしてしまう。
+  static final _mathBlockPattern = RegExp(r'\$\$[\s\S]*?\$\$');
+
+  // インライン数式 $...$（改行をまたがない範囲）
+  static final _mathInlinePattern = RegExp(r'\$([^\$\n]+?)\$');
 
   // コメント %%非表示%%
   static final _commentPattern = RegExp(r'%%[\s\S]*?%%');
@@ -77,11 +82,14 @@ class ObsidianExtensionProcessor {
     final metadata = <String, dynamic>{};
     String result = _extractAndRemoveFrontmatter(text, metadata);
 
-    // 除外系はコードブロック（mermaid含む）→数式→コメントの順で処理する。
-    // コードブロック内に $ や %% を含むサンプルコードがあっても、
+    // 除外系はコードブロック（mermaid含む）→ブロック数式→インライン数式→コメントの
+    // 順で処理する。コードブロック内に $ や %% を含むサンプルコードがあっても、
     // 先にブロックごと除去することで誤って部分的に変換されないようにする。
+    // ブロック数式をインライン数式より先に処理しないと、$$の片方だけが
+    // インライン数式パターンに誤ってマッチする可能性がある。
     result = result.replaceAll(_codeBlockPattern, '');
-    result = result.replaceAll(_mathPattern, '');
+    result = result.replaceAll(_mathBlockPattern, '');
+    result = result.replaceAll(_mathInlinePattern, '');
     result = result.replaceAll(_commentPattern, '');
 
     // 埋め込みは通常のWikilinkのスーパーセットなので先に処理する。
@@ -122,7 +130,7 @@ class ObsidianExtensionProcessor {
 
     return ObsidianProcessResult(
       processedText: result.trim(),
-      extractedMetadata: metadata,
+      extractedMetadata: Map.unmodifiable(metadata),
     );
   }
 
