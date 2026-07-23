@@ -50,5 +50,23 @@ void main() {
 
       expect(converter.convert(input), expected);
     });
+
+    test('インラインコード内の**強調記法もどき**は変換されずそのまま残る', () {
+      expect(converter.convert('`**not bold**`'), '**not bold**');
+    });
+
+    test('インラインコードと通常の強調が同じ行に混在しても正しく変換される', () {
+      expect(
+        converter.convert('`**not bold**`と**本物の強調**が混在。'),
+        '**not bold**と本物の強調が混在。',
+      );
+    });
+
+    test('本文中の数字とインラインコードが混在していても数字を誤って置換しない', () {
+      expect(
+        converter.convert('第1章では`code1`と`code2`を2024年に解説する。'),
+        '第1章ではcode1とcode2を2024年に解説する。',
+      );
+    });
   });
 }
