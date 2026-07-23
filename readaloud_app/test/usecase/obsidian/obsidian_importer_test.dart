@@ -72,7 +72,11 @@ class _FakeObsidianRepository implements ObsidianRepository {
     if (error != null) {
       throw error;
     }
-    return contents[uri] ?? '';
+    final content = contents[uri];
+    if (content == null) {
+      throw StateError('No content registered for uri: $uri');
+    }
+    return content;
   }
 
   @override
