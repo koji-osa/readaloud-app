@@ -7,6 +7,9 @@ abstract class ObsidianRepository {
   /// ユーザーがキャンセルした場合はnullを返す。
   Future<String?> pickVaultDirectory();
 
+  /// 保存済みのVault URIを取得する。未設定の場合はnullを返す。
+  Future<String?> getVaultUri();
+
   /// 保存済みのVaultURI配下のMarkdownノート一覧を取得する。
   /// Vaultが未設定の場合は空リストを返す。
   Future<List<VaultEntry>> listNotes();
