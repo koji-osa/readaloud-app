@@ -17,6 +17,8 @@ class MarkdownContentParser implements ContentParser {
   final _obsidianProcessor = ObsidianExtensionProcessor();
   final _standardConverter = StandardMarkdownConverter();
 
+  // Parser共通インターフェース（ContentParser）として、将来追加され得るPDF Parser等、
+  // 非同期処理が必要な実装とシグネチャを揃えるためFuture<ParsedContent>を返す。
   @override
   Future<ParsedContent> parse(RawContent raw) async {
     String text = raw.text;
