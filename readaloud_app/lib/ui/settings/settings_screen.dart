@@ -6,6 +6,42 @@ import '../../model/setting.dart';
 import '../home/widgets/tts_usage_banner.dart';
 import '../../util/debug_logger.dart';
 import '../../util/table_debug_logger.dart'; // FIX-050
+import '../../repository/obsidian_repository.dart';
+import '../../repository/impl/obsidian_repository_impl.dart';
+import '../../repository/impl/docman_vault_data_source.dart';
+import '../../repository/impl/settings_repository_impl.dart';
+
+final obsidianVaultSettingsViewModelProvider =
+    StateNotifierProvider<ObsidianVaultSettingsViewModel, String?>((ref) {
+  final obsidianRepo = ObsidianRepositoryImpl(
+    DocmanVaultDataSource(),
+    SettingsRepositoryImpl(),
+  );
+  return ObsidianVaultSettingsViewModel(obsidianRepo);
+});
+
+/// Obsidian Vaultフォルダの選択状態（URIのみ）を保持する専用ViewModel。
+///
+/// SettingsViewModelはプレーンな文字列設定の読み書きに責務を絞っているため、
+/// SAFピッカーを伴うVault選択はここで切り分ける。
+class ObsidianVaultSettingsViewModel extends StateNotifier<String?> {
+  final ObsidianRepository _repository;
+
+  ObsidianVaultSettingsViewModel(this._repository) : super(null) {
+    _loadVaultUri();
+  }
+
+  Future<void> _loadVaultUri() async {
+    state = await _repository.getVaultUri();
+  }
+
+  Future<void> pickVaultDirectory() async {
+    final uri = await _repository.pickVaultDirectory();
+    if (uri != null) {
+      state = uri;
+    }
+  }
+}
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -14,6 +50,8 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(settingsViewModelProvider);
     final vm    = ref.read(settingsViewModelProvider.notifier);
+    final vaultUri = ref.watch(obsidianVaultSettingsViewModelProvider);
+    final obsidianVm = ref.read(obsidianVaultSettingsViewModelProvider.notifier);
 
     return Scaffold(
       body: SafeArea(
@@ -267,6 +305,18 @@ class SettingsScreen extends ConsumerWidget {
                     onTap: () => _downloadTableDebugLog(context),
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Obsidian連携
+            _SectionTitle(title: 'Obsidian連携'),
+            _SettingCard(
+              child: _SettingRow(
+                icon: Icons.folder_open,
+                label: 'Vaultフォルダ',
+                value: vaultUri ?? '未設定',
+                onTap: () => obsidianVm.pickVaultDirectory(),
               ),
             ),
             const SizedBox(height: 32),

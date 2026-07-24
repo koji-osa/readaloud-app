@@ -84,6 +84,10 @@ class _FakeObsidianRepository implements ObsidianRepository {
       throw UnimplementedError('not used in this test');
 
   @override
+  Future<String?> getVaultUri() async =>
+      throw UnimplementedError('not used in this test');
+
+  @override
   Future<List<VaultEntry>> listNotes() async =>
       throw UnimplementedError('not used in this test');
 

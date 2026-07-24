@@ -20,6 +20,11 @@ class ObsidianRepositoryImpl implements ObsidianRepository {
   }
 
   @override
+  Future<String?> getVaultUri() {
+    return _settingsRepository.get(SettingKeys.obsidianVaultUri);
+  }
+
+  @override
   Future<List<VaultEntry>> listNotes() async {
     final vaultUri = await _settingsRepository.get(
       SettingKeys.obsidianVaultUri,
