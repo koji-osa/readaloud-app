@@ -2,13 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../viewmodel/add_content_viewmodel.dart';
+import '../../viewmodel/obsidian_import_viewmodel.dart';
 import '../../usecase/content/save_content_usecase.dart';
 import '../../usecase/content/fetch_url_content_usecase.dart';
 import '../../usecase/content/extract_pdf_content_usecase.dart';
+import '../../usecase/content/import_content_usecase.dart';
+import '../../usecase/obsidian/obsidian_importer.dart';
 import '../../repository/impl/content_repository_impl.dart';
+import '../../repository/impl/obsidian_repository_impl.dart';
+import '../../repository/impl/docman_vault_data_source.dart';
+import '../../repository/impl/settings_repository_impl.dart';
 import '../../model/content.dart';
 import '../player/player_screen.dart';
 import '../home/home_screen.dart';
+import '../settings/settings_screen.dart';
 import '../../util/text_cleaner.dart';
 
 final addContentViewModelProvider =
@@ -19,6 +26,19 @@ final addContentViewModelProvider =
     saveContent: SaveContentUseCase(repo),
     fetchUrl: FetchUrlContentUseCase(),
     extractPdf: ExtractPdfContentUseCase(),
+  );
+});
+
+final obsidianImportViewModelProvider = StateNotifierProvider.autoDispose<
+    ObsidianImportViewModel, ObsidianImportState>((ref) {
+  final obsidianRepo = ObsidianRepositoryImpl(
+    DocmanVaultDataSource(),
+    SettingsRepositoryImpl(),
+  );
+  return ObsidianImportViewModel(
+    repository: obsidianRepo,
+    importer: ObsidianImporter(obsidianRepo),
+    importContent: ImportContentUseCase(SaveContentUseCase(ContentRepositoryImpl())),
   );
 });
 
@@ -39,7 +59,7 @@ class _AddScreenState extends ConsumerState<AddScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
     if (widget.initialText != null) {
       _textController.text = widget.initialText!;
     }
@@ -120,6 +140,7 @@ class _AddScreenState extends ConsumerState<AddScreen>
                 Tab(text: 'テキスト'),
                 Tab(text: 'URL'),
                 Tab(text: 'ファイル'),
+                Tab(text: 'Obsidian'),
               ],
               labelColor: const Color(0xFF9B6FE0),
               unselectedLabelColor: const Color(0xFF44445A),
@@ -158,6 +179,8 @@ class _AddScreenState extends ConsumerState<AddScreen>
                     },
                     isLoading: state.isLoading,
                   ),
+                  // Obsidianタブ
+                  const _ObsidianTab(),
                 ],
               ),
             ),
@@ -426,18 +449,155 @@ class _FileTab extends StatelessWidget {
   }
 }
 
+// Obsidianタブ
+class _ObsidianTab extends ConsumerStatefulWidget {
+  const _ObsidianTab();
+
+  @override
+  ConsumerState<_ObsidianTab> createState() => _ObsidianTabState();
+}
+
+class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(
+      () => ref.read(obsidianImportViewModelProvider.notifier).loadNotes(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(obsidianImportViewModelProvider);
+    final vm = ref.read(obsidianImportViewModelProvider.notifier);
+
+    ref.listen(obsidianImportViewModelProvider, (prev, next) {
+      final result = next.importResult;
+      if (result != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '取り込み完了: 成功${result.successCount}件・失敗${result.failureCount}件',
+            ),
+            backgroundColor: result.failureCount > 0
+                ? const Color(0xFFF87171)
+                : const Color(0xFF4ADE80),
+          ),
+        );
+        vm.clearImportResult();
+      }
+    });
+
+    if (state.isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFF7C5CBF)),
+      );
+    }
+
+    if (!state.vaultConfigured) {
+      return Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('📁', style: TextStyle(fontSize: 48)),
+              const SizedBox(height: 16),
+              const Text(
+                '設定画面でVaultを選択してください',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Color(0xFF8888AA)),
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF8888AA),
+                  side: const BorderSide(color: Color(0xFF3A3A55)),
+                ),
+                child: const Text('設定画面を開く'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (state.notes.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(
+          child: Text(
+            'Vault内にMarkdownノートが見つかりませんでした',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: Color(0xFF8888AA)),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: state.notes.length,
+            itemBuilder: (context, index) {
+              final note = state.notes[index];
+              final selected = state.selectedUris.contains(note.uri);
+              return CheckboxListTile(
+                value: selected,
+                onChanged: (_) => vm.toggleSelection(note.uri),
+                controlAffinity: ListTileControlAffinity.leading,
+                activeColor: const Color(0xFF7C5CBF),
+                title: Text(
+                  note.relativePath,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFFF0F0F8),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: _StartButton(
+            onPressed: vm.importSelected,
+            isLoading: state.isImporting,
+            label: '選択したノートを取り込む (${state.selectedUris.length}件)',
+            enabled: state.selectedUris.isNotEmpty,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _StartButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool isLoading;
+  final String label;
+  final bool enabled;
 
-  const _StartButton({required this.onPressed, required this.isLoading});
+  const _StartButton({
+    required this.onPressed,
+    required this.isLoading,
+    this.label = '読み上げる',
+    this.enabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: isLoading ? null : onPressed,
+        onPressed: isLoading || !enabled ? null : onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF7C5CBF),
           foregroundColor: Colors.white,
@@ -455,9 +615,9 @@ class _StartButton extends StatelessWidget {
                   color: Colors.white,
                 ),
               )
-            : const Text(
-                '読み上げる',
-                style: TextStyle(
+            : Text(
+                label,
+                style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
                 ),
