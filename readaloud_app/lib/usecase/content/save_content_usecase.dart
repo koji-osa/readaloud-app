@@ -53,10 +53,11 @@ class SaveContentUseCase {
               : sourceFilename;
         }
         return body.substring(0, body.length.clamp(0, 30));
+      case 'obsidian':
       case 'text':
       case 'share':
       default:
-        // テキスト・共有の場合は本文の先頭30文字
+        // テキスト・共有・Obsidianの場合は本文の先頭30文字
         final trimmed = body.trim().replaceAll('\n', ' ');
         return trimmed.substring(0, trimmed.length.clamp(0, 30));
     }
