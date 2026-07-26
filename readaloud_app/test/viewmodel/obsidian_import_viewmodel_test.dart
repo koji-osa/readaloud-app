@@ -72,15 +72,27 @@ void main() {
 
       importer.results = [
         ImportNoteResult(
-          noteUri: 'content://vault/a.md',
+          entry: const VaultEntry(
+            uri: 'content://vault/a.md',
+            relativePath: 'a.md',
+            name: 'a.md',
+          ),
           content: const RawContent(text: '# A'),
         ),
         ImportNoteResult(
-          noteUri: 'content://vault/b.md',
+          entry: const VaultEntry(
+            uri: 'content://vault/b.md',
+            relativePath: 'b.md',
+            name: 'b.md',
+          ),
           error: Exception('read failed'),
         ),
         ImportNoteResult(
-          noteUri: 'content://vault/c.md',
+          entry: const VaultEntry(
+            uri: 'content://vault/c.md',
+            relativePath: 'c.md',
+            name: 'c.md',
+          ),
           content: const RawContent(text: '# C'),
         ),
       ];
@@ -98,7 +110,11 @@ void main() {
       viewModel.toggleSelection('content://vault/a.md');
       importer.results = [
         ImportNoteResult(
-          noteUri: 'content://vault/a.md',
+          entry: const VaultEntry(
+            uri: 'content://vault/a.md',
+            relativePath: 'a.md',
+            name: 'a.md',
+          ),
           content: const RawContent(text: '# A'),
         ),
       ];
@@ -112,7 +128,11 @@ void main() {
       viewModel.toggleSelection('content://vault/a.md');
       importer.results = [
         ImportNoteResult(
-          noteUri: 'content://vault/a.md',
+          entry: const VaultEntry(
+            uri: 'content://vault/a.md',
+            relativePath: 'a.md',
+            name: 'a.md',
+          ),
           content: const RawContent(text: '# A'),
         ),
       ];
@@ -127,7 +147,11 @@ void main() {
 
       importer.results = [
         ImportNoteResult(
-          noteUri: 'content://vault/a.md',
+          entry: const VaultEntry(
+            uri: 'content://vault/a.md',
+            relativePath: 'a.md',
+            name: 'a.md',
+          ),
           content: const RawContent(text: '# A'),
         ),
       ];
@@ -137,6 +161,33 @@ void main() {
 
       expect(viewModel.state.importResult?.successCount, 0);
       expect(viewModel.state.importResult?.failureCount, 1);
+    });
+
+    test('importSelected()はstate.notesから選択URIに対応するVaultEntryを引き当ててImporterへ渡す', () async {
+      repository.vaultUri = 'content://vault/root';
+      repository.notes = const [
+        VaultEntry(uri: 'content://vault/a.md', relativePath: 'a.md', name: 'a.md'),
+        VaultEntry(uri: 'content://vault/b.md', relativePath: 'folder/b.md', name: 'b.md'),
+      ];
+      await viewModel.loadNotes();
+
+      viewModel.toggleSelection('content://vault/b.md');
+      importer.results = [
+        ImportNoteResult(
+          entry: const VaultEntry(
+            uri: 'content://vault/b.md',
+            relativePath: 'folder/b.md',
+            name: 'b.md',
+          ),
+          content: const RawContent(text: '# B'),
+        ),
+      ];
+
+      await viewModel.importSelected();
+
+      expect(importer.capturedEntries, hasLength(1));
+      expect(importer.capturedEntries.single.uri, 'content://vault/b.md');
+      expect(importer.capturedEntries.single.name, 'b.md');
     });
 
     test('loadNotes()でlistNotes()が例外を投げてもisLoadingがfalseに戻る', () async {
@@ -161,7 +212,11 @@ void main() {
       viewModel.toggleSelection('content://vault/a.md');
       importer.results = [
         ImportNoteResult(
-          noteUri: 'content://vault/a.md',
+          entry: const VaultEntry(
+            uri: 'content://vault/a.md',
+            relativePath: 'a.md',
+            name: 'a.md',
+          ),
           content: const RawContent(text: '# A'),
         ),
       ];
@@ -207,9 +262,11 @@ class _FakeObsidianRepository implements ObsidianRepository {
 class _FakeObsidianImporter implements ObsidianImporter {
   List<ImportNoteResult> results = const [];
   bool shouldThrow = false;
+  final List<VaultEntry> capturedEntries = [];
 
   @override
-  Future<List<ImportNoteResult>> importNotes(List<String> noteUris) async {
+  Future<List<ImportNoteResult>> importNotes(List<VaultEntry> entries) async {
+    capturedEntries.addAll(entries);
     if (shouldThrow) {
       throw Exception('import notes failed');
     }
