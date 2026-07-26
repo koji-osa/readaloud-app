@@ -96,7 +96,10 @@ class ObsidianImportViewModel extends StateNotifier<ObsidianImportState> {
   }
 
   /// 選択中の全ノートを取り込む。
-  Future<void> importSelected() async {
+  ///
+  /// [shouldClean]がtrueの場合、Obsidian記法変換後の本文に対して
+  /// TextCleaner.clean()を適用する([ImportContentUseCase.execute]に委譲)。
+  Future<void> importSelected({bool shouldClean = false}) async {
     if (state.selectedUris.isEmpty || state.isImporting) return;
 
     state = state.copyWith(isImporting: true);
@@ -116,6 +119,7 @@ class ObsidianImportViewModel extends StateNotifier<ObsidianImportState> {
             raw: result.content!,
             parser: MarkdownContentParser(obsidianExtensions: true),
             sourceType: 'obsidian',
+            shouldClean: shouldClean,
           );
           successCount++;
         } catch (_) {

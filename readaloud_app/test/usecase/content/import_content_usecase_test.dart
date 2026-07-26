@@ -74,6 +74,29 @@ void main() {
       expect(saveContent.capturedSourceFilename, 'note.md');
     });
 
+    test('shouldClean: trueの場合、parser.parse()後のbodyにTextCleanerが適用されて渡される', () async {
+      const raw = RawContent(text: '# A');
+      parser.result = ParsedContent(body: '本文 https://example.com の続き');
+
+      await useCase.execute(
+        raw: raw,
+        parser: parser,
+        sourceType: 'obsidian',
+        shouldClean: true,
+      );
+
+      expect(saveContent.capturedBody, '本文 (URLの記載省略) の続き');
+    });
+
+    test('shouldCleanを指定しない場合(デフォルトfalse)はTextCleanerが適用されない', () async {
+      const raw = RawContent(text: '# A');
+      parser.result = ParsedContent(body: '本文 https://example.com の続き');
+
+      await useCase.execute(raw: raw, parser: parser, sourceType: 'obsidian');
+
+      expect(saveContent.capturedBody, '本文 https://example.com の続き');
+    });
+
     test('SaveContentUseCaseの戻り値がそのまま返される', () async {
       const raw = RawContent(text: 'text');
       parser.result = ParsedContent(body: 'body');
