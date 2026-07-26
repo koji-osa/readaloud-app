@@ -154,6 +154,7 @@ class _SourceBadge extends StatelessWidget {
       'url' => ('URL', const Color(0xFF60A5FA)),
       'file' => ('PDF', const Color(0xFFFBBF24)),
       'share' => ('共有', const Color(0xFF4ADE80)),
+      'obsidian' => ('Obsidian', const Color(0xFF7C3AED)),
       _ => ('テキスト', const Color(0xFF9B6FE0)),
     };
 

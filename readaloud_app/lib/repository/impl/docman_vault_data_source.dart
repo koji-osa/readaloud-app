@@ -10,6 +10,9 @@ abstract class DocmanNode {
   String get uri;
   String get name;
   bool get isDirectory;
+
+  /// 最終更新日時(epochミリ秒)。取得できない場合は0(不明)。
+  int get lastModified;
   Future<List<DocmanNode>> listChildren();
   Future<String> readAsString();
 }
@@ -50,8 +53,21 @@ class DocmanVaultDataSource implements VaultDataSource {
     final visited = <String>{};
     await _collect(root, '', entries, visited);
     // docmanのlistDocuments()の順序はAndroidのSAFプロバイダ依存で非決定的なため、
-    // relativePathで明示的にソートする。
-    entries.sort((a, b) => a.relativePath.compareTo(b.relativePath));
+    // 明示的にソートする。lastModifiedが0(不明)のエントリは末尾にまとめ、
+    // それ以外は更新日時の降順(新しい順)で並べる。同一時刻の場合は
+    // relativePathの昇順でタイブレークする。
+    entries.sort((a, b) {
+      final aUnknown = a.lastModified == 0;
+      final bUnknown = b.lastModified == 0;
+      if (aUnknown != bUnknown) {
+        return aUnknown ? 1 : -1;
+      }
+      if (!aUnknown) {
+        final byLastModified = b.lastModified.compareTo(a.lastModified);
+        if (byLastModified != 0) return byLastModified;
+      }
+      return a.relativePath.compareTo(b.relativePath);
+    });
     return entries;
   }
 
@@ -78,6 +94,7 @@ class DocmanVaultDataSource implements VaultDataSource {
             uri: child.uri,
             relativePath: relativePath,
             name: child.name,
+            lastModified: child.lastModified,
           ),
         );
       }
@@ -118,6 +135,9 @@ class _DocmanFileNode implements DocmanNode {
 
   @override
   bool get isDirectory => _file.isDirectory;
+
+  @override
+  int get lastModified => _file.lastModified;
 
   @override
   Future<List<DocmanNode>> listChildren() async {

@@ -175,6 +175,132 @@ void main() {
     );
 
     test(
+      'listEntries places entries with unknown lastModified (0) at the end',
+      () async {
+        final known = _FakeDocmanNode(
+          uri: 'content://vault/root4/aaa.md',
+          name: 'aaa.md',
+          isDirectory: false,
+          lastModified: 1000,
+        );
+        final unknown = _FakeDocmanNode(
+          uri: 'content://vault/root4/zzz.md',
+          name: 'zzz.md',
+          isDirectory: false,
+        );
+        final root4 = _FakeDocmanNode(
+          uri: 'content://vault/root4',
+          name: 'root4',
+          isDirectory: true,
+          // relativePath順ではunknownの方が先に来るはずだが、
+          // lastModifiedが不明なので末尾に回されるべき。
+          children: [unknown, known],
+        );
+
+        final dataSource4 = DocmanVaultDataSource(
+          resolver: (uri) async => {
+            root4.uri: root4,
+            known.uri: known,
+            unknown.uri: unknown,
+          }[uri],
+        );
+
+        final entries = await dataSource4.listEntries('content://vault/root4');
+
+        expect(
+          entries.map((e) => e.relativePath).toList(),
+          const ['aaa.md', 'zzz.md'],
+        );
+      },
+    );
+
+    test(
+      'listEntries sorts entries with known lastModified in descending order',
+      () async {
+        final oldest = _FakeDocmanNode(
+          uri: 'content://vault/root5/oldest.md',
+          name: 'oldest.md',
+          isDirectory: false,
+          lastModified: 1000,
+        );
+        final newest = _FakeDocmanNode(
+          uri: 'content://vault/root5/newest.md',
+          name: 'newest.md',
+          isDirectory: false,
+          lastModified: 3000,
+        );
+        final middle = _FakeDocmanNode(
+          uri: 'content://vault/root5/middle.md',
+          name: 'middle.md',
+          isDirectory: false,
+          lastModified: 2000,
+        );
+        final root5 = _FakeDocmanNode(
+          uri: 'content://vault/root5',
+          name: 'root5',
+          isDirectory: true,
+          children: [oldest, newest, middle],
+        );
+
+        final dataSource5 = DocmanVaultDataSource(
+          resolver: (uri) async => {
+            root5.uri: root5,
+            oldest.uri: oldest,
+            newest.uri: newest,
+            middle.uri: middle,
+          }[uri],
+        );
+
+        final entries = await dataSource5.listEntries('content://vault/root5');
+
+        expect(
+          entries.map((e) => e.relativePath).toList(),
+          const ['newest.md', 'middle.md', 'oldest.md'],
+        );
+      },
+    );
+
+    test(
+      'listEntries breaks ties on identical lastModified by relativePath '
+      'ascending',
+      () async {
+        final zeta = _FakeDocmanNode(
+          uri: 'content://vault/root6/zeta.md',
+          name: 'zeta.md',
+          isDirectory: false,
+          lastModified: 5000,
+        );
+        final alpha = _FakeDocmanNode(
+          uri: 'content://vault/root6/alpha.md',
+          name: 'alpha.md',
+          isDirectory: false,
+          lastModified: 5000,
+        );
+        final root6 = _FakeDocmanNode(
+          uri: 'content://vault/root6',
+          name: 'root6',
+          isDirectory: true,
+          children: [zeta, alpha],
+        );
+
+        final dataSource6 = DocmanVaultDataSource(
+          resolver: (uri) async => {
+            root6.uri: root6,
+            zeta.uri: zeta,
+            alpha.uri: alpha,
+          }[uri],
+        );
+
+        final entries = await dataSource6.listEntries('content://vault/root6');
+
+        expect(
+          entries.map((e) => e.relativePath).toList(),
+          const ['alpha.md', 'zeta.md'],
+        );
+      },
+    );
+
+    test(
       'listEntries terminates and does not duplicate entries when a '
       'directory cycle exists',
       () async {
@@ -222,6 +348,7 @@ class _FakeDocmanNode implements DocmanNode {
     required this.isDirectory,
     List<_FakeDocmanNode> children = const [],
     this.content = '',
+    this.lastModified = 0,
   }) : _children = List.of(children);
 
   @override
@@ -232,6 +359,9 @@ class _FakeDocmanNode implements DocmanNode {
 
   @override
   final bool isDirectory;
+
+  @override
+  final int lastModified;
 
   final String content;
   final List<_FakeDocmanNode> _children;
