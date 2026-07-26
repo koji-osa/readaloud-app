@@ -68,6 +68,20 @@ void main() {
       expect(results[1].content!.metadata['title'], 'note4');
     });
 
+    test('先頭がドットのみのファイル名の場合、名前がそのままタイトルになる', () async {
+      repository.contents['content://vault/.hidden'] = '# Hidden';
+
+      final results = await importer.importNotes(const [
+        VaultEntry(
+          uri: 'content://vault/.hidden',
+          relativePath: '.hidden',
+          name: '.hidden',
+        ),
+      ]);
+
+      expect(results[0].content!.metadata['title'], '.hidden');
+    });
+
     test('一部のノート読み込みが失敗しても他の取り込みは継続される', () async {
       repository.contents['content://vault/note1.md'] = '# Note1';
       repository.errors['content://vault/note2.md'] = Exception('read failed');

@@ -42,7 +42,7 @@ class ObsidianImporter {
   String _titleFor(VaultEntry entry) {
     final name = entry.name;
     final dotIndex = name.lastIndexOf('.');
-    return dotIndex >= 0 ? name.substring(0, dotIndex) : name;
+    return dotIndex > 0 ? name.substring(0, dotIndex) : name;
   }
 }
 
