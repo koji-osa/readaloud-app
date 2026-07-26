@@ -87,6 +87,10 @@ class DocmanVaultDataSource implements VaultDataSource {
       final relativePath =
           relativeDir.isEmpty ? child.name : '$relativeDir/${child.name}';
       if (child.isDirectory) {
+        // ".trash"や".obsidian"等、ドット始まりのフォルダはObsidianの
+        // 内部管理用ディレクトリ(ゴミ箱・設定等)であり、通常のノート一覧には
+        // 含めるべきではないため、フォルダごと走査対象から除外する。
+        if (child.name.startsWith('.')) continue;
         await _collect(child, relativePath, entries, visited);
       } else if (_markdownExtensions
           .any((ext) => child.name.toLowerCase().endsWith(ext))) {

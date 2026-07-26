@@ -301,6 +301,94 @@ void main() {
     );
 
     test(
+      'listEntries excludes .trash/ folder and its contents',
+      () async {
+        final trashedNote = _FakeDocmanNode(
+          uri: 'content://vault/root7/.trash/deleted.md',
+          name: 'deleted.md',
+          isDirectory: false,
+        );
+        final trashDir = _FakeDocmanNode(
+          uri: 'content://vault/root7/.trash',
+          name: '.trash',
+          isDirectory: true,
+          children: [trashedNote],
+        );
+        final visibleNote = _FakeDocmanNode(
+          uri: 'content://vault/root7/note.md',
+          name: 'note.md',
+          isDirectory: false,
+        );
+        final root7 = _FakeDocmanNode(
+          uri: 'content://vault/root7',
+          name: 'root7',
+          isDirectory: true,
+          children: [visibleNote, trashDir],
+        );
+
+        final dataSource7 = DocmanVaultDataSource(
+          resolver: (uri) async => {
+            root7.uri: root7,
+            visibleNote.uri: visibleNote,
+            trashDir.uri: trashDir,
+            trashedNote.uri: trashedNote,
+          }[uri],
+        );
+
+        final entries = await dataSource7.listEntries('content://vault/root7');
+
+        expect(
+          entries.map((e) => e.relativePath).toList(),
+          const ['note.md'],
+        );
+      },
+    );
+
+    test(
+      'listEntries excludes .obsidian/ folder and its contents',
+      () async {
+        final configFile = _FakeDocmanNode(
+          uri: 'content://vault/root8/.obsidian/config.md',
+          name: 'config.md',
+          isDirectory: false,
+        );
+        final obsidianDir = _FakeDocmanNode(
+          uri: 'content://vault/root8/.obsidian',
+          name: '.obsidian',
+          isDirectory: true,
+          children: [configFile],
+        );
+        final visibleNote = _FakeDocmanNode(
+          uri: 'content://vault/root8/note.md',
+          name: 'note.md',
+          isDirectory: false,
+        );
+        final root8 = _FakeDocmanNode(
+          uri: 'content://vault/root8',
+          name: 'root8',
+          isDirectory: true,
+          children: [visibleNote, obsidianDir],
+        );
+
+        final dataSource8 = DocmanVaultDataSource(
+          resolver: (uri) async => {
+            root8.uri: root8,
+            visibleNote.uri: visibleNote,
+            obsidianDir.uri: obsidianDir,
+            configFile.uri: configFile,
+          }[uri],
+        );
+
+        final entries = await dataSource8.listEntries('content://vault/root8');
+
+        expect(
+          entries.map((e) => e.relativePath).toList(),
+          const ['note.md'],
+        );
+      },
+    );
+
+    test(
       'listEntries terminates and does not duplicate entries when a '
       'directory cycle exists',
       () async {
