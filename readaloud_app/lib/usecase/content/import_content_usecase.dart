@@ -1,6 +1,7 @@
 import '../../model/content.dart';
 import '../../model/raw_content.dart';
 import '../../util/content_parser.dart';
+import '../../util/text_cleaner.dart';
 import 'save_content_usecase.dart';
 
 /// [ContentParser]による変換と[SaveContentUseCase]による保存をまとめた薄いユースケース。
@@ -17,6 +18,7 @@ class ImportContentUseCase {
     required String sourceType,
     String? sourceUrl,
     String? sourceFilename,
+    bool shouldClean = false,
   }) async {
     final parsed = await parser.parse(raw);
 
@@ -25,8 +27,14 @@ class ImportContentUseCase {
     // フォールバックでタイトル生成)になる。
     final metadataTitle = parsed.metadata['title'];
 
+    // shouldCleanはparser.parse()による変換(frontmatterのtags抽出、wikilinkの
+    // リンク先展開等)より後のbodyに対して適用する。変換前の生テキストに適用すると、
+    // URLや長い英数字を含むタグ・ノートタイトルが変換される前に誤って
+    // 省略されてしまうため。
+    final body = shouldClean ? TextCleaner.clean(parsed.body) : parsed.body;
+
     return _saveContent.execute(
-      body: parsed.body,
+      body: body,
       sourceType: sourceType,
       title: metadataTitle is String ? metadataTitle : null,
       sourceUrl: sourceUrl,

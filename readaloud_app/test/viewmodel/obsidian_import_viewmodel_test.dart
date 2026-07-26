@@ -94,6 +94,34 @@ void main() {
       expect(importContent.executedRaws, hasLength(2));
     });
 
+    test('importSelected(shouldClean: true)はImportContentUseCase.execute()にshouldClean:trueを渡す', () async {
+      viewModel.toggleSelection('content://vault/a.md');
+      importer.results = [
+        ImportNoteResult(
+          noteUri: 'content://vault/a.md',
+          content: const RawContent(text: '# A'),
+        ),
+      ];
+
+      await viewModel.importSelected(shouldClean: true);
+
+      expect(importContent.capturedShouldCleans, [true]);
+    });
+
+    test('importSelected()をshouldClean未指定で呼ぶとImportContentUseCase.execute()にshouldClean:falseを渡す', () async {
+      viewModel.toggleSelection('content://vault/a.md');
+      importer.results = [
+        ImportNoteResult(
+          noteUri: 'content://vault/a.md',
+          content: const RawContent(text: '# A'),
+        ),
+      ];
+
+      await viewModel.importSelected();
+
+      expect(importContent.capturedShouldCleans, [false]);
+    });
+
     test('importSelected()でImportContentUseCase側が失敗した場合も失敗として集計される', () async {
       viewModel.toggleSelection('content://vault/a.md');
 
@@ -191,6 +219,7 @@ class _FakeObsidianImporter implements ObsidianImporter {
 
 class _FakeImportContentUseCase implements ImportContentUseCase {
   final List<RawContent> executedRaws = [];
+  final List<bool> capturedShouldCleans = [];
   bool shouldThrow = false;
 
   @override
@@ -200,11 +229,13 @@ class _FakeImportContentUseCase implements ImportContentUseCase {
     required String sourceType,
     String? sourceUrl,
     String? sourceFilename,
+    bool shouldClean = false,
   }) async {
     if (shouldThrow) {
       throw Exception('save failed');
     }
     executedRaws.add(raw);
+    capturedShouldCleans.add(shouldClean);
     return Content(title: 'dummy', body: raw.text, sourceType: sourceType);
   }
 }

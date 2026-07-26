@@ -458,6 +458,8 @@ class _ObsidianTab extends ConsumerStatefulWidget {
 }
 
 class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
+  bool _shouldClean = true; // デフォルトON（_TextTabStateと同じ方針）
+
   @override
   void initState() {
     super.initState();
@@ -566,12 +568,33 @@ class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.all(16),
-          child: _StartButton(
-            onPressed: vm.importSelected,
-            isLoading: state.isImporting,
-            label: '選択したノートを取り込む (${state.selectedUris.length}件)',
-            enabled: state.selectedUris.isNotEmpty,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Checkbox(
+                    value: _shouldClean,
+                    onChanged: (v) => setState(() => _shouldClean = v ?? true),
+                    activeColor: const Color(0xFF7C5CBF),
+                    side: const BorderSide(color: Color(0xFF3A3A55)),
+                  ),
+                  const Expanded(
+                    child: Text(
+                      'URLや長い英数字・記号を省略する',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _StartButton(
+                onPressed: () => vm.importSelected(shouldClean: _shouldClean),
+                isLoading: state.isImporting,
+                label: '選択したノートを取り込む (${state.selectedUris.length}件)',
+                enabled: state.selectedUris.isNotEmpty,
+              ),
+            ],
           ),
         ),
       ],
