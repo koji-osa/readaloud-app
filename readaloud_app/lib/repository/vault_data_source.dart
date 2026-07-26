@@ -5,6 +5,7 @@ class VaultEntry {
     required this.uri,
     required this.relativePath,
     required this.name,
+    this.lastModified = 0,
   });
 
   /// SAFのcontent URIなど、ファイルを一意に指す識別子。
@@ -15,6 +16,10 @@ class VaultEntry {
 
   /// ファイル名。例: "note.md"
   final String name;
+
+  /// 最終更新日時(epochミリ秒)。取得できない場合は0(不明)。
+  /// Android SAFのプロバイダによっては取得できない場合がある。
+  final int lastModified;
 
   @override
   bool operator ==(Object other) =>
@@ -30,7 +35,8 @@ class VaultEntry {
 
   @override
   String toString() =>
-      'VaultEntry(uri: $uri, relativePath: $relativePath, name: $name)';
+      'VaultEntry(uri: $uri, relativePath: $relativePath, name: $name, '
+      'lastModified: $lastModified)';
 }
 
 /// ディレクトリベースのファイルストレージをSAF経由で扱うためのデータソース。
