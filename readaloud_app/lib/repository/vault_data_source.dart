@@ -18,6 +18,7 @@ class VaultEntry {
   final String name;
 
   /// 最終更新日時(epochミリ秒)。取得できない場合は0(不明)。
+  /// Android SAFのプロバイダによっては取得できない場合がある。
   final int lastModified;
 
   @override

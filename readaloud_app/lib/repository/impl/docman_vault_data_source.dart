@@ -12,6 +12,7 @@ abstract class DocmanNode {
   bool get isDirectory;
 
   /// 最終更新日時(epochミリ秒)。取得できない場合は0(不明)。
+  /// Android SAFのプロバイダによっては取得できない場合がある。
   int get lastModified;
   Future<List<DocmanNode>> listChildren();
   Future<String> readAsString();
