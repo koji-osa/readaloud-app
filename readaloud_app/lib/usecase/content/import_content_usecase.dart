@@ -22,9 +22,9 @@ class ImportContentUseCase {
   }) async {
     final parsed = await parser.parse(raw);
 
-    // ObsidianImporter側でVaultEntry.name(実ファイル名)をmetadata['title']に
-    // 設定する対応は未実装のため、現状は常にnull(SaveContentUseCase側の
-    // フォールバックでタイトル生成)になる。
+    // ObsidianImporterはVaultEntry.name(実ファイル名、拡張子除く)を
+    // metadata['title']に設定する。未設定の場合はSaveContentUseCase側の
+    // フォールバックでタイトル生成される。
     final metadataTitle = parsed.metadata['title'];
 
     // shouldCleanはparser.parse()による変換(frontmatterのtags抽出、wikilinkの

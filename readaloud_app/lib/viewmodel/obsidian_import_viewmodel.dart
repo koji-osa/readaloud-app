@@ -105,7 +105,10 @@ class ObsidianImportViewModel extends StateNotifier<ObsidianImportState> {
     state = state.copyWith(isImporting: true);
 
     try {
-      final results = await _importer.importNotes(state.selectedUris.toList());
+      final selectedEntries = state.notes
+          .where((entry) => state.selectedUris.contains(entry.uri))
+          .toList();
+      final results = await _importer.importNotes(selectedEntries);
 
       var successCount = 0;
       var failureCount = 0;
