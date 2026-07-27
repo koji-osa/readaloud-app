@@ -799,18 +799,31 @@ class _SettingRow extends StatelessWidget {
       leading: Icon(icon, color: const Color(0xFF8888AA), size: 20),
       title: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontSize: 13, color: Color(0xFFF0F0F8)),
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (value.isNotEmpty)
-            Text(
-              value,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
-            ),
-          const Icon(Icons.chevron_right, color: Color(0xFF44445A), size: 18),
-        ],
+      trailing: ConstrainedBox(
+        // 値(value)が長い場合でもラベル側の表示幅を確保するため、
+        // trailingの最大幅を画面幅に対する割合で制限する。
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.4,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (value.isNotEmpty)
+              Flexible(
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF8888AA)),
+                ),
+              ),
+            const Icon(Icons.chevron_right, color: Color(0xFF44445A), size: 18),
+          ],
+        ),
       ),
       onTap: onTap,
     );
