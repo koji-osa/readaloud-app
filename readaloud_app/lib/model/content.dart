@@ -12,6 +12,12 @@ class Content {
   final int createdAt;
   final int updatedAt;
   final int? syncedAt;
+  // 外部連携先（例: 'obsidian'）。sourceTypeとは独立させ、後から手動で紐付けるケースにも対応する
+  final String? externalType;
+  // 取り込み当時のObsidian Vault名（Vaultのフォルダ名変更に影響されないようContentごとに保持）
+  final String? vaultName;
+  // Vaultルートからの相対パス（sourceFilenameとは目的が異なるため分離）
+  final String? relativePath;
 
   // 文字数上限
   static const int maxTitleLength = 100;
@@ -29,6 +35,9 @@ class Content {
     int? createdAt,
     int? updatedAt,
     this.syncedAt,
+    this.externalType,
+    this.vaultName,
+    this.relativePath,
   })  : assert(title.length <= maxTitleLength,
             'タイトルは${maxTitleLength}文字以内にしてください'),
         assert(body.length <= maxBodyLength,
@@ -52,6 +61,9 @@ class Content {
         'created_at': createdAt,
         'updated_at': updatedAt,
         'synced_at': syncedAt,
+        'external_type': externalType,
+        'vault_name': vaultName,
+        'relative_path': relativePath,
       };
 
   factory Content.fromMap(Map<String, dynamic> map) => Content(
@@ -66,6 +78,9 @@ class Content {
         createdAt: map['created_at'],
         updatedAt: map['updated_at'],
         syncedAt: map['synced_at'],
+        externalType: map['external_type'],
+        vaultName: map['vault_name'],
+        relativePath: map['relative_path'],
       );
 
   Content copyWith({
@@ -86,5 +101,8 @@ class Content {
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now().millisecondsSinceEpoch,
         syncedAt: syncedAt,
+        externalType: externalType,
+        vaultName: vaultName,
+        relativePath: relativePath,
       );
 }

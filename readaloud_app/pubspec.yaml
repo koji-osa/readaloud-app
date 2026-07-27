@@ -40,11 +40,13 @@ dependencies:
   # バックグラウンド再生
   # 音声フォーカス管理（電話着信時の自動停止）
   syncfusion_flutter_pdf: ^26.2.14
+  meta: ^1.18.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  sqflite_common_ffi: ^2.4.2
 
 flutter:
   uses-material-design: true
