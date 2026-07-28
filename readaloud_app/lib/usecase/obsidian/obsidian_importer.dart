@@ -14,6 +14,11 @@ class ObsidianImporter {
   /// 他の件の処理は止まらない。結果は成功/失敗の別に関わらず、
   /// 呼び出し時の順序で[ImportNoteResult]のリストとして返す。
   Future<List<ImportNoteResult>> importNotes(List<VaultEntry> entries) async {
+    // Vault名はエントリごとに変わらないため、ループの外で1回だけ解決する
+    // (SAFへの重複アクセスを避けるため)。取得に失敗してもインポート自体は
+    // 継続し、各エントリのvaultNameはnullのまま設定される。
+    final vaultName = await _repository.getVaultName();
+
     final results = <ImportNoteResult>[];
 
     for (final entry in entries) {
@@ -24,7 +29,13 @@ class ObsidianImporter {
             entry: entry,
             content: RawContent(
               text: text,
-              metadata: {'noteUri': entry.uri, 'title': _titleFor(entry)},
+              metadata: {
+                'noteUri': entry.uri,
+                'title': _titleFor(entry),
+                'externalType': 'obsidian',
+                'vaultName': vaultName,
+                'relativePath': entry.relativePath,
+              },
             ),
           ),
         );

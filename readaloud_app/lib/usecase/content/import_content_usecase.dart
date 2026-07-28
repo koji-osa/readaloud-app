@@ -27,6 +27,14 @@ class ImportContentUseCase {
     // フォールバックでタイトル生成される。
     final metadataTitle = parsed.metadata['title'];
 
+    // externalType/vaultName/relativePathはObsidian取り込み時のみ
+    // ObsidianImporterがmetadataに設定する。それ以外のsourceType(url/file/
+    // text/share)ではmetadataにキー自体が存在しないため、いずれもnullのまま
+    // SaveContentUseCaseへ渡る。
+    final metadataExternalType = parsed.metadata['externalType'];
+    final metadataVaultName = parsed.metadata['vaultName'];
+    final metadataRelativePath = parsed.metadata['relativePath'];
+
     // shouldCleanはparser.parse()による変換(frontmatterのtags抽出、wikilinkの
     // リンク先展開等)より後のbodyに対して適用する。変換前の生テキストに適用すると、
     // URLや長い英数字を含むタグ・ノートタイトルが変換される前に誤って
@@ -39,6 +47,9 @@ class ImportContentUseCase {
       title: metadataTitle is String ? metadataTitle : null,
       sourceUrl: sourceUrl,
       sourceFilename: sourceFilename,
+      externalType: metadataExternalType is String ? metadataExternalType : null,
+      vaultName: metadataVaultName is String ? metadataVaultName : null,
+      relativePath: metadataRelativePath is String ? metadataRelativePath : null,
     );
   }
 }

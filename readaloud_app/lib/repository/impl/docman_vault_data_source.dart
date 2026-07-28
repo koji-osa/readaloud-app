@@ -114,6 +114,12 @@ class DocmanVaultDataSource implements VaultDataSource {
     }
     return node.readAsString();
   }
+
+  @override
+  Future<String?> getDirectoryName(String uri) async {
+    final node = await _resolve(uri);
+    return node?.name;
+  }
 }
 
 Future<DocmanNode?> _resolveDocmanNode(String uri) async {

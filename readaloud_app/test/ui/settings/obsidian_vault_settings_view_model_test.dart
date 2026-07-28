@@ -50,6 +50,10 @@ class _FakeObsidianRepository implements ObsidianRepository {
   Future<String?> getVaultUri() async => vaultUri;
 
   @override
+  Future<String?> getVaultName() async =>
+      throw UnimplementedError('not used in this test');
+
+  @override
   Future<String?> pickVaultDirectory() async {
     if (pickResult != null) {
       vaultUri = pickResult;

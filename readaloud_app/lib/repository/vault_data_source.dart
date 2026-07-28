@@ -53,4 +53,8 @@ abstract class VaultDataSource {
 
   /// [uri]が指すファイルの本文を読み込む。
   Future<String> readFile(String uri);
+
+  /// [uri]が指すディレクトリ(またはファイル)の表示名を取得する。
+  /// 解決できない場合はnullを返す。
+  Future<String?> getDirectoryName(String uri);
 }
