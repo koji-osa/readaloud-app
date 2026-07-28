@@ -59,5 +59,10 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE"/>
         </intent>
+        <!-- Android 11以降のパッケージ可視性制約対応: ObsidianアプリのobsidianスキームをcanLaunchUrl()で検出可能にする -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="obsidian"/>
+        </intent>
     </queries>
 </manifest>
