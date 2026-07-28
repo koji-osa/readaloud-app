@@ -1,3 +1,4 @@
+import 'package:meta/meta.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -18,7 +19,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'readaloud.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onConfigure: (db) async {
         // 外部キー制約を有効化（カスケード削除に必要）
         await db.execute('PRAGMA foreign_keys = ON');
@@ -28,7 +29,13 @@ class DatabaseHelper {
     );
   }
 
-  Future<void> _onCreate(Database db, int version) async {
+  // マイグレーションテストから実際のonCreate/onUpgradeを直接検証するための公開エイリアス
+  @visibleForTesting
+  static const onCreateForTest = _onCreate;
+  @visibleForTesting
+  static const onUpgradeForTest = _onUpgrade;
+
+  static Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE contents (
         id TEXT PRIMARY KEY,
@@ -41,7 +48,10 @@ class DatabaseHelper {
         status TEXT NOT NULL DEFAULT 'unread',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        synced_at INTEGER
+        synced_at INTEGER,
+        external_type TEXT,
+        vault_name TEXT,
+        relative_path TEXT
       )
     ''');
 
@@ -95,7 +105,12 @@ class DatabaseHelper {
     ''');
   }
 
-  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // 将来のバージョンアップ時にここに追記
+  static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Obsidianノートへのワンタップ遷移機能のためのカラム追加
+      await db.execute('ALTER TABLE contents ADD COLUMN external_type TEXT');
+      await db.execute('ALTER TABLE contents ADD COLUMN vault_name TEXT');
+      await db.execute('ALTER TABLE contents ADD COLUMN relative_path TEXT');
+    }
   }
 }
