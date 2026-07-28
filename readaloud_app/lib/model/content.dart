@@ -16,7 +16,8 @@ class Content {
   final String? externalType;
   // 取り込み当時のObsidian Vault名（Vaultのフォルダ名変更に影響されないようContentごとに保持）
   final String? vaultName;
-  // Vaultルートからの相対パス（sourceFilenameとは目的が異なるため分離）
+  // 取り込み時点でのVaultルートからの相対パス（sourceFilenameとは目的が異なるため分離）
+  // Obsidian側でファイルが後から移動・リネームされてもDBの値は更新されない
   final String? relativePath;
 
   // 文字数上限
