@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // REQ-045 REQ-046
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../model/content.dart';
+import '../../util/obsidian_launcher.dart';
 import '../../viewmodel/player_viewmodel.dart';
 import '../../usecase/playback/start_playback_usecase.dart';
 import '../../usecase/playback/stop_playback_usecase.dart';
@@ -93,12 +94,24 @@ class PlayerScreen extends ConsumerStatefulWidget {
 
   const PlayerScreen({super.key, required this.content, this.autoPlay = false, this.autoCreateToc = false, this.tocProvider}); // REQ-034 FIX-065
 
+  /// [content]がObsidian由来かつ「Obsidianで開く」ボタンの表示に
+  /// 必要な情報（vaultName・relativePath）を両方とも持っているかを判定する。
+  static bool showObsidianButtonFor(Content content) {
+    return content.externalType == 'obsidian' &&
+        (content.vaultName?.isNotEmpty ?? false) &&
+        (content.relativePath?.isNotEmpty ?? false);
+  }
+
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
 }
 
 class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   List<String> _availableVoices = [];
+  final ObsidianLauncher _obsidianLauncher = ObsidianLauncher();
+
+  bool get _showObsidianButton =>
+      PlayerScreen.showObsidianButtonFor(widget.content);
 
   @override
   void initState() {
@@ -348,6 +361,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ],
               ),
             ),
+            // Obsidianで開くボタン（Obsidian連携コンテンツかつVault情報が揃っている場合のみ表示）
+            if (_showObsidianButton)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: GestureDetector(
+                  onTap: () => _openInObsidian(context),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2A2A3E),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF3A3A55)),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.open_in_new, size: 14, color: Color(0xFF8888AA)),
+                        SizedBox(width: 6),
+                        Text('Obsidianで開く', style: TextStyle(fontSize: 12, color: Color(0xFF8888AA))),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             // ブックマークパネル（スクロール可能 エリア）
             Expanded(
               child: SingleChildScrollView(
@@ -392,6 +430,69 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _openInObsidian(BuildContext context) async {
+    final content = widget.content;
+    final vaultName = content.vaultName;
+    final relativePath = content.relativePath;
+    if (vaultName == null || relativePath == null) return;
+
+    final result = await _obsidianLauncher.openNote(
+      vaultName: vaultName,
+      relativePath: relativePath,
+    );
+
+    if (!context.mounted) return;
+
+    switch (result) {
+      case ObsidianLaunchResult.success:
+        break;
+      case ObsidianLaunchResult.notInstalled:
+        await _showObsidianNotInstalledDialog(context);
+        break;
+      case ObsidianLaunchResult.launchFailed:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Obsidianを開けませんでした'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        break;
+    }
+  }
+
+  Future<void> _showObsidianNotInstalledDialog(BuildContext context) async {
+    final shouldOpenStore = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A3E),
+        title: const Text(
+          'Obsidianアプリが見つかりません',
+          style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 15),
+        ),
+        content: const Text(
+          'Obsidianアプリがインストールされていないため開けませんでした。ストアからインストールしますか？',
+          style: TextStyle(color: Color(0xFF8888AA), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('キャンセル',
+                style: TextStyle(color: Color(0xFF8888AA))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('ストアを開く',
+                style: TextStyle(color: Color(0xFF9B6FE0))),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldOpenStore == true) {
+      await _obsidianLauncher.openPlayStore();
+    }
   }
 
   Future<void> _showTableAnalysisDialog(
