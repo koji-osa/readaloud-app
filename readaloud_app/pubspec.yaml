@@ -33,6 +33,8 @@ dependencies:
   # PDF変換
   # Obsidian Vault等、SAF経由のディレクトリ取り込み
   docman: ^1.2.0
+  # 外部アプリ起動(ObsidianのURIスキーム等)
+  url_launcher: ^6.3.2
   # バックグラウンド再生
   audio_service: ^0.18.17
   # 音声フォーカス管理（電話着信時の自動停止）
