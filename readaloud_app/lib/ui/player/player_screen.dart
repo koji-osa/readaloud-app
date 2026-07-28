@@ -94,6 +94,14 @@ class PlayerScreen extends ConsumerStatefulWidget {
 
   const PlayerScreen({super.key, required this.content, this.autoPlay = false, this.autoCreateToc = false, this.tocProvider}); // REQ-034 FIX-065
 
+  /// [content]がObsidian由来かつ「Obsidianで開く」ボタンの表示に
+  /// 必要な情報（vaultName・relativePath）を両方とも持っているかを判定する。
+  static bool showObsidianButtonFor(Content content) {
+    return content.externalType == 'obsidian' &&
+        (content.vaultName?.isNotEmpty ?? false) &&
+        (content.relativePath?.isNotEmpty ?? false);
+  }
+
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
 }
@@ -102,12 +110,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   List<String> _availableVoices = [];
   final ObsidianLauncher _obsidianLauncher = ObsidianLauncher();
 
-  bool get _showObsidianButton {
-    final content = widget.content;
-    return content.externalType == 'obsidian' &&
-        (content.vaultName?.isNotEmpty ?? false) &&
-        (content.relativePath?.isNotEmpty ?? false);
-  }
+  bool get _showObsidianButton =>
+      PlayerScreen.showObsidianButtonFor(widget.content);
 
   @override
   void initState() {
