@@ -119,6 +119,18 @@ void main() {
       );
     });
 
+    test('getDirectoryName resolves the uri and returns its name', () async {
+      final name = await dataSource.getDirectoryName('content://vault/root');
+      expect(name, 'root');
+    });
+
+    test('getDirectoryName returns null when the uri cannot be resolved',
+        () async {
+      final name =
+          await dataSource.getDirectoryName('content://vault/unknown');
+      expect(name, isNull);
+    });
+
     test(
       'listEntries returns entries sorted by relativePath regardless of '
       'the order listChildren() returns them in',

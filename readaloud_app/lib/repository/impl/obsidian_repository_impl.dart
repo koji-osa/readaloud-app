@@ -25,6 +25,17 @@ class ObsidianRepositoryImpl implements ObsidianRepository {
   }
 
   @override
+  Future<String?> getVaultName() async {
+    final vaultUri = await getVaultUri();
+    if (vaultUri == null) return null;
+    try {
+      return await _vaultDataSource.getDirectoryName(vaultUri);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
   Future<List<VaultEntry>> listNotes() async {
     final vaultUri = await _settingsRepository.get(
       SettingKeys.obsidianVaultUri,

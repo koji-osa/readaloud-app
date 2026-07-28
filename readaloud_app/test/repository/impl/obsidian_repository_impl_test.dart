@@ -73,6 +73,40 @@ void main() {
       });
     });
 
+    group('getVaultName', () {
+      test('Vault未設定の場合はnullを返し、getDirectoryNameは呼ばれない', () async {
+        final name = await repository.getVaultName();
+
+        expect(name, isNull);
+        expect(vaultDataSource.getDirectoryNameCalledWith, isNull);
+      });
+
+      test('保存済みのVault URIをgetDirectoryNameに渡し、その結果を返す', () async {
+        settingsRepository.values[SettingKeys.obsidianVaultUri] =
+            'content://vault/root';
+        vaultDataSource.getDirectoryNameResult = 'MyVault';
+
+        final name = await repository.getVaultName();
+
+        expect(name, 'MyVault');
+        expect(
+          vaultDataSource.getDirectoryNameCalledWith,
+          'content://vault/root',
+        );
+      });
+
+      test('getDirectoryNameが例外を投げた場合もnullを返す(権限失効・フォルダ削除等を想定)',
+          () async {
+        settingsRepository.values[SettingKeys.obsidianVaultUri] =
+            'content://vault/root';
+        vaultDataSource.getDirectoryNameError = Exception('resolve failed');
+
+        final name = await repository.getVaultName();
+
+        expect(name, isNull);
+      });
+    });
+
     group('readNoteContent', () {
       test(
         'delegates to readFile with the given uri',
@@ -107,9 +141,12 @@ class _FakeVaultDataSource implements VaultDataSource {
   String? pickDirectoryResult;
   List<VaultEntry> listEntriesResult = [];
   String readFileResult = '';
+  String? getDirectoryNameResult;
+  Object? getDirectoryNameError;
 
   String? listEntriesCalledWith;
   String? readFileCalledWith;
+  String? getDirectoryNameCalledWith;
 
   @override
   Future<String?> pickDirectory() async => pickDirectoryResult;
@@ -124,6 +161,16 @@ class _FakeVaultDataSource implements VaultDataSource {
   Future<String> readFile(String uri) async {
     readFileCalledWith = uri;
     return readFileResult;
+  }
+
+  @override
+  Future<String?> getDirectoryName(String uri) async {
+    getDirectoryNameCalledWith = uri;
+    final error = getDirectoryNameError;
+    if (error != null) {
+      throw error;
+    }
+    return getDirectoryNameResult;
   }
 }
 

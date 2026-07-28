@@ -58,6 +58,37 @@ void main() {
       expect(saveContent.capturedTitle, isNull);
     });
 
+    test('parsed.metadataにexternalType・vaultName・relativePathがあれば'
+        'SaveContentUseCaseの対応する引数に渡す', () async {
+      const raw = RawContent(text: 'text');
+      parser.result = ParsedContent(
+        body: 'body',
+        metadata: {
+          'externalType': 'obsidian',
+          'vaultName': 'MyVault',
+          'relativePath': 'Projects/note.md',
+        },
+      );
+
+      await useCase.execute(raw: raw, parser: parser, sourceType: 'obsidian');
+
+      expect(saveContent.capturedExternalType, 'obsidian');
+      expect(saveContent.capturedVaultName, 'MyVault');
+      expect(saveContent.capturedRelativePath, 'Projects/note.md');
+    });
+
+    test('parsed.metadataにexternalType・vaultName・relativePathが無ければ'
+        'いずれもnullのまま渡す', () async {
+      const raw = RawContent(text: 'text');
+      parser.result = ParsedContent(body: 'body');
+
+      await useCase.execute(raw: raw, parser: parser, sourceType: 'url');
+
+      expect(saveContent.capturedExternalType, isNull);
+      expect(saveContent.capturedVaultName, isNull);
+      expect(saveContent.capturedRelativePath, isNull);
+    });
+
     test('sourceUrl・sourceFilenameが正しく伝播する', () async {
       const raw = RawContent(text: 'text');
       parser.result = ParsedContent(body: 'body');
@@ -127,6 +158,9 @@ class _FakeSaveContentUseCase implements SaveContentUseCase {
   String? capturedTitle;
   String? capturedSourceUrl;
   String? capturedSourceFilename;
+  String? capturedExternalType;
+  String? capturedVaultName;
+  String? capturedRelativePath;
   Content? returnValue;
 
   @override
@@ -136,12 +170,18 @@ class _FakeSaveContentUseCase implements SaveContentUseCase {
     String? title,
     String? sourceUrl,
     String? sourceFilename,
+    String? externalType,
+    String? vaultName,
+    String? relativePath,
   }) async {
     capturedBody = body;
     capturedSourceType = sourceType;
     capturedTitle = title;
     capturedSourceUrl = sourceUrl;
     capturedSourceFilename = sourceFilename;
+    capturedExternalType = externalType;
+    capturedVaultName = vaultName;
+    capturedRelativePath = relativePath;
     return returnValue ??= Content(
       title: title ?? 'dummy',
       body: body,

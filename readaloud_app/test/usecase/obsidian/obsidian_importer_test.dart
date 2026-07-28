@@ -39,12 +39,51 @@ void main() {
       expect(results[0].content!.metadata, {
         'noteUri': 'content://vault/note1.md',
         'title': 'note1',
+        'externalType': 'obsidian',
+        'vaultName': null,
+        'relativePath': 'note1.md',
       });
 
       expect(results[1].noteUri, 'content://vault/note2.md');
       expect(results[1].isSuccess, isTrue);
       expect(results[1].content!.text, '# Note2');
       expect(results[1].content!.metadata['title'], 'note2');
+    });
+
+    test('各エントリのmetadataにexternalType・vaultName・relativePathが設定される', () async {
+      repository.vaultName = 'MyVault';
+      repository.contents['content://vault/Projects/note.md'] = '# Note';
+
+      final results = await importer.importNotes(const [
+        VaultEntry(
+          uri: 'content://vault/Projects/note.md',
+          relativePath: 'Projects/note.md',
+          name: 'note.md',
+        ),
+      ]);
+
+      expect(results[0].content!.metadata['externalType'], 'obsidian');
+      expect(results[0].content!.metadata['vaultName'], 'MyVault');
+      expect(results[0].content!.metadata['relativePath'], 'Projects/note.md');
+    });
+
+    test('Vault名が取得できない場合(未設定・解決失敗いずれもObsidianRepository側で'
+        'nullに正規化される)、metadataのvaultNameはnullになる', () async {
+      // ObsidianRepositoryImplはVault名解決失敗時にnullを返す(例外を
+      // 投げない)実装のため、フェイクも同様にnullを返す前提で検証する。
+      repository.vaultName = null;
+      repository.contents['content://vault/note1.md'] = '# Note1';
+
+      final results = await importer.importNotes(const [
+        VaultEntry(
+          uri: 'content://vault/note1.md',
+          relativePath: 'note1.md',
+          name: 'note1.md',
+        ),
+      ]);
+
+      expect(results[0].isSuccess, isTrue);
+      expect(results[0].content!.metadata['vaultName'], isNull);
     });
 
     test('拡張子が.md以外、または存在しない場合も適切にタイトルが生成される', () async {
@@ -124,6 +163,7 @@ void main() {
 class _FakeObsidianRepository implements ObsidianRepository {
   final Map<String, String> contents = {};
   final Map<String, Object> errors = {};
+  String? vaultName;
 
   @override
   Future<String> readNoteContent(String uri) async {
@@ -145,6 +185,9 @@ class _FakeObsidianRepository implements ObsidianRepository {
   @override
   Future<String?> getVaultUri() async =>
       throw UnimplementedError('not used in this test');
+
+  @override
+  Future<String?> getVaultName() async => vaultName;
 
   @override
   Future<List<VaultEntry>> listNotes() async =>

@@ -12,6 +12,9 @@ class SaveContentUseCase {
     String? title,
     String? sourceUrl,
     String? sourceFilename,
+    String? externalType,
+    String? vaultName,
+    String? relativePath,
   }) async {
     // タイトル自動生成ロジック
     final generatedTitle = title ?? _generateTitle(
@@ -27,6 +30,9 @@ class SaveContentUseCase {
       sourceType: sourceType,
       sourceUrl: sourceUrl,
       sourceFilename: sourceFilename,
+      externalType: externalType,
+      vaultName: vaultName,
+      relativePath: relativePath,
     );
 
     await _repository.save(content);
