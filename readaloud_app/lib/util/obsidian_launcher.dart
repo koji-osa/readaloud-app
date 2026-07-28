@@ -64,21 +64,34 @@ class ObsidianLauncher {
       relativePath: relativePath,
     );
 
-    final canLaunch = await _canLaunch(uri);
+    bool canLaunch;
+    try {
+      canLaunch = await _canLaunch(uri);
+    } catch (_) {
+      return ObsidianLaunchResult.notInstalled;
+    }
     if (!canLaunch) {
       return ObsidianLaunchResult.notInstalled;
     }
 
-    final launched = await _launch(uri);
-    return launched
-        ? ObsidianLaunchResult.success
-        : ObsidianLaunchResult.launchFailed;
+    try {
+      final launched = await _launch(uri);
+      return launched
+          ? ObsidianLaunchResult.success
+          : ObsidianLaunchResult.launchFailed;
+    } catch (_) {
+      return ObsidianLaunchResult.launchFailed;
+    }
   }
 
   /// Obsidianアプリが見つからない場合に、Google Playストアの
   /// Obsidianアプリページを開く。
-  Future<bool> openPlayStore() {
-    return _launch(Uri.parse(obsidianPlayStoreUrl));
+  Future<bool> openPlayStore() async {
+    try {
+      return await _launch(Uri.parse(obsidianPlayStoreUrl));
+    } catch (_) {
+      return false;
+    }
   }
 }
 

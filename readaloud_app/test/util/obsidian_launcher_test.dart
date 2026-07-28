@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/util/obsidian_launcher.dart';
 
@@ -129,6 +130,39 @@ void main() {
 
       expect(result, ObsidianLaunchResult.launchFailed);
     });
+
+    test('returns notInstalled when canLaunchUrl throws', () async {
+      var launchCalled = false;
+      final launcher = ObsidianLauncher(
+        canLaunch: (_) async => throw PlatformException(code: 'error'),
+        launch: (_) async {
+          launchCalled = true;
+          return true;
+        },
+      );
+
+      final result = await launcher.openNote(
+        vaultName: 'Vault',
+        relativePath: 'note.md',
+      );
+
+      expect(result, ObsidianLaunchResult.notInstalled);
+      expect(launchCalled, isFalse);
+    });
+
+    test('returns launchFailed when launchUrl throws', () async {
+      final launcher = ObsidianLauncher(
+        canLaunch: (_) async => true,
+        launch: (_) async => throw PlatformException(code: 'error'),
+      );
+
+      final result = await launcher.openNote(
+        vaultName: 'Vault',
+        relativePath: 'note.md',
+      );
+
+      expect(result, ObsidianLaunchResult.launchFailed);
+    });
   });
 
   group('ObsidianLauncher.openPlayStore', () {
@@ -145,6 +179,16 @@ void main() {
 
       expect(result, isTrue);
       expect(launchedUri.toString(), obsidianPlayStoreUrl);
+    });
+
+    test('returns false when launchUrl throws', () async {
+      final launcher = ObsidianLauncher(
+        launch: (_) async => throw PlatformException(code: 'error'),
+      );
+
+      final result = await launcher.openPlayStore();
+
+      expect(result, isFalse);
     });
   });
 }

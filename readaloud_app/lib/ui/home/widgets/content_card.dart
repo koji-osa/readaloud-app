@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../model/content.dart';
+import '../../../util/obsidian_open_handler.dart';
+import '../../player/player_screen.dart';
 
 class ContentCard extends StatelessWidget {
   final Content content;
@@ -10,6 +12,7 @@ class ContentCard extends StatelessWidget {
   final bool isSelectMode;
   final bool isSelected;
   final VoidCallback? onLongPress;
+  final ObsidianOpenHandler? obsidianOpenHandler;
 
   const ContentCard({
     super.key,
@@ -21,6 +24,7 @@ class ContentCard extends StatelessWidget {
     this.isSelectMode = false,
     this.isSelected = false,
     this.onLongPress,
+    this.obsidianOpenHandler,
   });
 
   @override
@@ -67,6 +71,17 @@ class ContentCard extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (!isSelectMode && PlayerScreen.showObsidianButtonFor(content)) ...[
+                  IconButton(
+                    icon: const Icon(Icons.open_in_new,
+                        color: Color(0xFF8888AA), size: 18),
+                    tooltip: 'Obsidianで開く',
+                    onPressed: () => _openInObsidian(context),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 if (!isSelectMode)
                   IconButton(
                     icon: const Icon(Icons.delete_outline,
@@ -118,6 +133,11 @@ class ContentCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  void _openInObsidian(BuildContext context) {
+    final handler = obsidianOpenHandler ?? ObsidianOpenHandler();
+    handler.open(context, content);
   }
 
   double get _progressValue {
