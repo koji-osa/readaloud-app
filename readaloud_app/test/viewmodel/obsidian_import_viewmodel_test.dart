@@ -65,6 +65,20 @@ void main() {
       expect(viewModel.state.selectedUris, {'content://vault/b.md'});
     });
 
+    test('setSelection()でまとめて選択できる(フォルダ単位の一括選択)', () async {
+      viewModel.setSelection(
+        ['content://vault/a.md', 'content://vault/b.md'],
+        true,
+      );
+      expect(viewModel.state.selectedUris, {
+        'content://vault/a.md',
+        'content://vault/b.md',
+      });
+
+      viewModel.setSelection(['content://vault/a.md'], false);
+      expect(viewModel.state.selectedUris, {'content://vault/b.md'});
+    });
+
     test('importSelected()で複数選択して取り込むと成功/失敗が正しく集計される', () async {
       viewModel.toggleSelection('content://vault/a.md');
       viewModel.toggleSelection('content://vault/b.md');
