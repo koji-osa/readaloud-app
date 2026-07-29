@@ -17,6 +17,7 @@ import '../player/player_screen.dart';
 import '../home/home_screen.dart';
 import '../settings/settings_screen.dart';
 import '../../util/text_cleaner.dart';
+import '../widgets/folder_tree_view.dart';
 
 final addContentViewModelProvider =
     StateNotifierProvider.autoDispose<AddContentViewModel, AddContentState>(
@@ -545,26 +546,13 @@ class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
     return Column(
       children: [
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: state.notes.length,
-            itemBuilder: (context, index) {
-              final note = state.notes[index];
-              final selected = state.selectedUris.contains(note.uri);
-              return CheckboxListTile(
-                value: selected,
-                onChanged: (_) => vm.toggleSelection(note.uri),
-                controlAffinity: ListTileControlAffinity.leading,
-                activeColor: const Color(0xFF7C5CBF),
-                title: Text(
-                  note.relativePath,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFFF0F0F8),
-                  ),
-                ),
-              );
-            },
+          child: FolderTreeView(
+            items: state.notes,
+            pathOf: (note) => note.relativePath,
+            idOf: (note) => note.uri,
+            selectedIds: state.selectedUris,
+            onSelectionChanged: (uris, selected) =>
+                vm.setSelection(uris, selected),
           ),
         ),
         Padding(

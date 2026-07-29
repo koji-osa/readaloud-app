@@ -95,6 +95,17 @@ class ObsidianImportViewModel extends StateNotifier<ObsidianImportState> {
     state = state.copyWith(selectedUris: selected);
   }
 
+  /// [uris]をまとめて選択/選択解除する(フォルダ単位の一括選択用)。
+  void setSelection(List<String> uris, bool selected) {
+    final updated = Set<String>.from(state.selectedUris);
+    if (selected) {
+      updated.addAll(uris);
+    } else {
+      updated.removeAll(uris);
+    }
+    state = state.copyWith(selectedUris: updated);
+  }
+
   /// 選択中の全ノートを取り込む。
   ///
   /// [shouldClean]がtrueの場合、Obsidian記法変換後の本文に対して
