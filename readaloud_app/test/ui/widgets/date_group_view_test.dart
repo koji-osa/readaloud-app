@@ -173,6 +173,10 @@ void main() {
       expect(formatNoteDateTime(millis, DateGroup.thisWeek), '7/27');
       expect(formatNoteDateTime(millis, DateGroup.older), '7/27');
     });
+
+    test('lastModifiedMillisが0(取得不可)の場合は「日時不明」', () {
+      expect(formatNoteDateTime(0, DateGroup.older), '日時不明');
+    });
   });
 
   group('DateGroupView (widget)', () {

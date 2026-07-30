@@ -103,7 +103,12 @@ bool? groupCheckState<T>(
 ///
 /// 「今日・昨日・一昨日」は当日中の判別が主目的のため時刻("14:32")、
 /// 「今週・それ以前」は日付の判別が主目的のため月日("7/27")で表示する。
+/// [lastModifiedMillis]が0以下(SAFで取得不可)の場合、Unixエポック
+/// (1970年)由来の日付を実際の更新日時のように表示してしまうと
+/// 誤解を招くため、「日時不明」を返す。
 String formatNoteDateTime(int lastModifiedMillis, DateGroup group) {
+  if (lastModifiedMillis <= 0) return '日時不明';
+
   final dt = DateTime.fromMillisecondsSinceEpoch(lastModifiedMillis);
   switch (group) {
     case DateGroup.today:
