@@ -3,9 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/ui/widgets/folder_tree_view.dart';
 
 class _Item {
-  const _Item(this.path, this.id);
+  const _Item(this.path, this.id, [this.modifiedAt = 0]);
   final String path;
   final String id;
+  final int modifiedAt;
 }
 
 void main() {
@@ -45,6 +46,85 @@ void main() {
 
       expect(root.children, hasLength(1));
       expect(root.children.first.children, hasLength(2));
+    });
+
+    test('sortKeyOfを渡すと同一階層内のファイルはその値の降順(新しい順)に並ぶ', () {
+      final items = [
+        const _Item('a.md', 'id-a', 100),
+        const _Item('b.md', 'id-b', 300),
+        const _Item('c.md', 'id-c', 200),
+      ];
+
+      final root = buildTree<_Item>(
+        items: items,
+        pathOf: (i) => i.path,
+        sortKeyOf: (i) => i.modifiedAt,
+      );
+
+      expect(root.children.map((n) => n.name), ['b.md', 'c.md', 'a.md']);
+    });
+
+    test('sortKeyOfは階層ごとに独立して適用される', () {
+      final items = [
+        const _Item('folder/a.md', 'id-a', 100),
+        const _Item('folder/b.md', 'id-b', 300),
+        const _Item('z.md', 'id-z', 1),
+      ];
+
+      final root = buildTree<_Item>(
+        items: items,
+        pathOf: (i) => i.path,
+        sortKeyOf: (i) => i.modifiedAt,
+      );
+
+      // フォルダは常に先頭(名前順)、ファイルはsortKeyOfの降順。
+      expect(root.children.map((n) => n.name), ['folder', 'z.md']);
+      final folder = root.children.first;
+      expect(folder.children.map((n) => n.name), ['b.md', 'a.md']);
+    });
+
+    test('sortKeyOfが同値(全件同じ値)の場合はファイル名の昇順に並ぶ', () {
+      final items = [
+        const _Item('c.md', 'id-c', 0),
+        const _Item('a.md', 'id-a', 0),
+        const _Item('b.md', 'id-b', 0),
+      ];
+
+      final root = buildTree<_Item>(
+        items: items,
+        pathOf: (i) => i.path,
+        sortKeyOf: (i) => i.modifiedAt,
+      );
+
+      expect(root.children.map((n) => n.name), ['a.md', 'b.md', 'c.md']);
+    });
+
+    test('sortKeyOfを渡さない場合は従来通り名前順のまま', () {
+      final items = [
+        const _Item('b.md', 'id-b', 300),
+        const _Item('a.md', 'id-a', 100),
+        const _Item('c.md', 'id-c', 200),
+      ];
+
+      final root = buildTree<_Item>(items: items, pathOf: (i) => i.path);
+
+      expect(root.children.map((n) => n.name), ['a.md', 'b.md', 'c.md']);
+    });
+
+    test('フォルダは常に名前順で、ファイルより先に並ぶ(sortKeyOf指定時も維持)', () {
+      final items = [
+        const _Item('zeta/note.md', 'id-zeta', 1),
+        const _Item('alpha/note.md', 'id-alpha', 1),
+        const _Item('newest.md', 'id-newest', 999),
+      ];
+
+      final root = buildTree<_Item>(
+        items: items,
+        pathOf: (i) => i.path,
+        sortKeyOf: (i) => i.modifiedAt,
+      );
+
+      expect(root.children.map((n) => n.name), ['alpha', 'zeta', 'newest.md']);
     });
   });
 
@@ -237,6 +317,29 @@ void main() {
 
       expect(calledIds, unorderedEquals(['id-a', 'id-b']));
       expect(calledSelected, isFalse);
+    });
+
+    testWidgets('sortKeyOfを渡すと展開したフォルダ内のファイルが降順で表示される', (tester) async {
+      final sortedItems = [
+        const _Item('folder/old.md', 'id-old', 100),
+        const _Item('folder/new.md', 'id-new', 300),
+      ];
+
+      await tester.pumpWidget(wrap(FolderTreeView<_Item>(
+        items: sortedItems,
+        pathOf: (i) => i.path,
+        idOf: (i) => i.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+        sortKeyOf: (i) => i.modifiedAt,
+      )));
+
+      await tester.tap(find.byIcon(Icons.chevron_right));
+      await tester.pumpAndSettle();
+
+      final newOffset = tester.getTopLeft(find.text('new.md')).dy;
+      final oldOffset = tester.getTopLeft(find.text('old.md')).dy;
+      expect(newOffset, lessThan(oldOffset));
     });
   });
 }

@@ -553,6 +553,7 @@ class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
             selectedIds: state.selectedUris,
             onSelectionChanged: (uris, selected) =>
                 vm.setSelection(uris, selected),
+            sortKeyOf: (note) => note.lastModified,
           ),
         ),
         Padding(

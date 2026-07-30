@@ -32,10 +32,13 @@ class TreeNode<T> {
 ///
 /// 戻り値はパスを持たない仮想的なルートノード(表示はされず、
 /// その子要素がツリーのトップレベルとして扱われる)。
-/// 各階層内は「ディレクトリが先、ファイルが後、それぞれ名前順」に並べる。
+/// 各階層内は「ディレクトリが先(名前順)、ファイルが後」に並ぶ。
+/// ファイル同士の順序は[sortKeyOf]が返す値の降順。[sortKeyOf]がnullの場合は
+/// ディレクトリと同じく名前順にフォールバックする。
 TreeNode<T> buildTree<T>({
   required List<T> items,
   required String Function(T item) pathOf,
+  Comparable Function(T item)? sortKeyOf,
 }) {
   final root = TreeNode<T>(name: '', path: '', isDirectory: true);
 
@@ -76,17 +79,28 @@ TreeNode<T> buildTree<T>({
     }
   }
 
-  _sortChildrenRecursively(root);
+  _sortChildrenRecursively(root, sortKeyOf);
   return root;
 }
 
-void _sortChildrenRecursively<T>(TreeNode<T> node) {
+void _sortChildrenRecursively<T>(
+  TreeNode<T> node,
+  Comparable Function(T item)? sortKeyOf,
+) {
   node.children.sort((a, b) {
     if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
+    if (!a.isDirectory && sortKeyOf != null) {
+      // ファイル同士は更新日時などのsortKeyOfの降順(新しい順)に並べる。
+      // 同値(例: SAF経由でlastModifiedが取得できず全件0になるケース)の場合は
+      // 名前の昇順にタイブレークし、並び順を決定的にする。
+      final keyCompare = sortKeyOf(b.value as T).compareTo(sortKeyOf(a.value as T));
+      if (keyCompare != 0) return keyCompare;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    }
     return a.name.toLowerCase().compareTo(b.name.toLowerCase());
   });
   for (final child in node.children) {
-    if (child.isDirectory) _sortChildrenRecursively(child);
+    if (child.isDirectory) _sortChildrenRecursively(child, sortKeyOf);
   }
 }
 
@@ -166,6 +180,8 @@ bool? folderCheckState<T>(
 /// - [selectedIds]: 選択中の葉ノードIDの集合。呼び出し側(ViewModel等)が保持する。
 /// - [onSelectionChanged]: チェックボックス操作時に呼ばれる。
 ///   フォルダをタップした場合は配下の全葉ノードIDがまとめて渡される。
+/// - [sortKeyOf]: 同一階層内のファイル同士の並び替えキーを返す(降順)。
+///   省略した場合は従来通り名前順になる(汎用ウィジェットとしての後方互換性のため)。
 class FolderTreeView<T> extends StatefulWidget {
   const FolderTreeView({
     super.key,
@@ -174,6 +190,7 @@ class FolderTreeView<T> extends StatefulWidget {
     required this.idOf,
     required this.selectedIds,
     required this.onSelectionChanged,
+    this.sortKeyOf,
   });
 
   final List<T> items;
@@ -181,6 +198,7 @@ class FolderTreeView<T> extends StatefulWidget {
   final String Function(T item) idOf;
   final Set<String> selectedIds;
   final void Function(List<String> ids, bool selected) onSelectionChanged;
+  final Comparable Function(T item)? sortKeyOf;
 
   @override
   State<FolderTreeView<T>> createState() => _FolderTreeViewState<T>();
@@ -192,7 +210,11 @@ class _FolderTreeViewState<T> extends State<FolderTreeView<T>> {
 
   @override
   Widget build(BuildContext context) {
-    final root = buildTree<T>(items: widget.items, pathOf: widget.pathOf);
+    final root = buildTree<T>(
+      items: widget.items,
+      pathOf: widget.pathOf,
+      sortKeyOf: widget.sortKeyOf,
+    );
     final visibleNodes = flattenVisibleNodes<T>(root, _expandedPaths);
 
     return ListView.builder(
