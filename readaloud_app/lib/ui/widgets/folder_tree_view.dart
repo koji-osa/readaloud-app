@@ -91,7 +91,11 @@ void _sortChildrenRecursively<T>(
     if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
     if (!a.isDirectory && sortKeyOf != null) {
       // ファイル同士は更新日時などのsortKeyOfの降順(新しい順)に並べる。
-      return sortKeyOf(b.value as T).compareTo(sortKeyOf(a.value as T));
+      // 同値(例: SAF経由でlastModifiedが取得できず全件0になるケース)の場合は
+      // 名前の昇順にタイブレークし、並び順を決定的にする。
+      final keyCompare = sortKeyOf(b.value as T).compareTo(sortKeyOf(a.value as T));
+      if (keyCompare != 0) return keyCompare;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     }
     return a.name.toLowerCase().compareTo(b.name.toLowerCase());
   });

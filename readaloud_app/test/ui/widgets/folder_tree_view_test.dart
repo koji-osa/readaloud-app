@@ -83,6 +83,22 @@ void main() {
       expect(folder.children.map((n) => n.name), ['b.md', 'a.md']);
     });
 
+    test('sortKeyOfが同値(全件同じ値)の場合はファイル名の昇順に並ぶ', () {
+      final items = [
+        const _Item('c.md', 'id-c', 0),
+        const _Item('a.md', 'id-a', 0),
+        const _Item('b.md', 'id-b', 0),
+      ];
+
+      final root = buildTree<_Item>(
+        items: items,
+        pathOf: (i) => i.path,
+        sortKeyOf: (i) => i.modifiedAt,
+      );
+
+      expect(root.children.map((n) => n.name), ['a.md', 'b.md', 'c.md']);
+    });
+
     test('sortKeyOfを渡さない場合は従来通り名前順のまま', () {
       final items = [
         const _Item('b.md', 'id-b', 300),
