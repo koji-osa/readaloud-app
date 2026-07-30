@@ -18,6 +18,7 @@ import '../home/home_screen.dart';
 import '../settings/settings_screen.dart';
 import '../../util/text_cleaner.dart';
 import '../widgets/folder_tree_view.dart';
+import '../widgets/date_group_view.dart';
 
 final addContentViewModelProvider =
     StateNotifierProvider.autoDispose<AddContentViewModel, AddContentState>(
@@ -458,8 +459,13 @@ class _ObsidianTab extends ConsumerStatefulWidget {
   ConsumerState<_ObsidianTab> createState() => _ObsidianTabState();
 }
 
+enum _ObsidianBrowseMode { folder, date }
+
 class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
   bool _shouldClean = true; // デフォルトON（_TextTabStateと同じ方針）
+  // モード切替はUI表示上の状態に過ぎず、選択状態(selectedUris)は
+  // ViewModel側で一元管理されているため、ここでは切り替えても影響しない。
+  _ObsidianBrowseMode _mode = _ObsidianBrowseMode.folder;
 
   @override
   void initState() {
@@ -545,16 +551,33 @@ class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
 
     return Column(
       children: [
-        Expanded(
-          child: FolderTreeView(
-            items: state.notes,
-            pathOf: (note) => note.relativePath,
-            idOf: (note) => note.uri,
-            selectedIds: state.selectedUris,
-            onSelectionChanged: (uris, selected) =>
-                vm.setSelection(uris, selected),
-            sortKeyOf: (note) => note.lastModified,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: _ObsidianBrowseModeSegmentedControl(
+            mode: _mode,
+            onChanged: (mode) => setState(() => _mode = mode),
           ),
+        ),
+        Expanded(
+          child: _mode == _ObsidianBrowseMode.folder
+              ? FolderTreeView(
+                  items: state.notes,
+                  pathOf: (note) => note.relativePath,
+                  idOf: (note) => note.uri,
+                  selectedIds: state.selectedUris,
+                  onSelectionChanged: (uris, selected) =>
+                      vm.setSelection(uris, selected),
+                  sortKeyOf: (note) => note.lastModified,
+                )
+              : DateGroupView(
+                  items: state.notes,
+                  lastModifiedOf: (note) => note.lastModified,
+                  labelOf: (note) => note.relativePath,
+                  idOf: (note) => note.uri,
+                  selectedIds: state.selectedUris,
+                  onSelectionChanged: (uris, selected) =>
+                      vm.setSelection(uris, selected),
+                ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -587,6 +610,67 @@ class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 「フォルダで探す」/「日付で探す」を切り替えるセグメントボタン。
+class _ObsidianBrowseModeSegmentedControl extends StatelessWidget {
+  const _ObsidianBrowseModeSegmentedControl({
+    required this.mode,
+    required this.onChanged,
+  });
+
+  final _ObsidianBrowseMode mode;
+  final void Function(_ObsidianBrowseMode mode) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _segmentButton(
+            label: 'フォルダで探す',
+            selected: mode == _ObsidianBrowseMode.folder,
+            onTap: () => onChanged(_ObsidianBrowseMode.folder),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _segmentButton(
+            label: '日付で探す',
+            selected: mode == _ObsidianBrowseMode.date,
+            onTap: () => onChanged(_ObsidianBrowseMode.date),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _segmentButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF7C5CBF) : const Color(0xFF2A2A3E),
+          border: Border.all(color: const Color(0xFF3A3A55)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : const Color(0xFF8888AA),
+          ),
+        ),
+      ),
     );
   }
 }
