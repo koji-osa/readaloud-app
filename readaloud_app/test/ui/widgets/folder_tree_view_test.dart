@@ -198,6 +198,21 @@ void main() {
       expect(visible.firstWhere((v) => v.node.name == 'root.md').dividerBefore, isTrue);
     });
 
+    test('サブフォルダ内(depth > 0)でフォルダ→ファイルに切り替わってもdividerBeforeは立たない', () {
+      final items = [
+        const _Item('folder/sub/a.md', 'id-a'),
+        const _Item('folder/root.md', 'id-root'),
+      ];
+      final root = buildTree<_Item>(items: items, pathOf: (i) => i.path);
+
+      final visible = flattenVisibleNodes<_Item>(root, {'folder'});
+
+      expect(visible.map((v) => v.node.name), ['folder', 'sub', 'root.md']);
+      // folder配下(depth 1)は sub(ディレクトリ) → root.md(ファイル)の切り替わりだが、
+      // ルート階層(depth 0)ではないためdividerは立たない
+      expect(visible.firstWhere((v) => v.node.name == 'root.md').dividerBefore, isFalse);
+    });
+
     test('ディレクトリのみ、またはファイルのみの階層ではdividerBeforeは立たない', () {
       final onlyFiles = buildTree<_Item>(
         items: [const _Item('a.md', 'id-a'), const _Item('b.md', 'id-b')],
