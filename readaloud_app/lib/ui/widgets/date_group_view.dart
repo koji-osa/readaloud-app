@@ -123,6 +123,24 @@ String formatNoteDateTime(int lastModifiedMillis, DateGroup group) {
   }
 }
 
+/// [relativePath]から[name]部分を取り除いた親フォルダパスを返す。
+///
+/// 日付モードでは同名ファイルがフォルダ違いで存在すると区別できないため、
+/// ファイル名の下に添える補助表示として使う。ルート直下のファイル
+/// ([relativePath]と[name]が一致する場合)は親フォルダを持たないため
+/// 空文字を返す(呼び出し側は空文字の場合、行自体を表示しない)。
+String parentFolderPath(String relativePath, String name) {
+  if (relativePath == name) return '';
+
+  final withoutName = relativePath.substring(
+    0,
+    relativePath.length - name.length,
+  );
+  return withoutName.endsWith('/')
+      ? withoutName.substring(0, withoutName.length - 1)
+      : withoutName;
+}
+
 /// フラットなアイテムのリストを、更新日時の[DateGroup]ごとに見出し付きで
 /// 表示する汎用ウィジェット。[FolderTreeView]と異なり階層や開閉状態を
 /// 持たないため、常に全グループ・全件を展開表示するシンプルな構成。
@@ -131,6 +149,11 @@ String formatNoteDateTime(int lastModifiedMillis, DateGroup group) {
 /// - [labelOf]: 各アイテムの表示名を返す。日付モードではフォルダ階層が
 ///   視覚的な手がかりにならないため、フルパスではなくファイル名のみを
 ///   渡すことを想定する(長いフォルダ名でファイル名が埋もれるのを防ぐため)。
+/// - [parentFolderOf]: 各アイテムの親フォルダ名を返す(例:
+///   [parentFolderPath]を使ってrelativePathから算出)。ファイル名だけでは
+///   区別できない同名ファイルのために、ファイル名の下に小さく表示する。
+///   ルート直下のファイル等、親フォルダがない場合は空文字を返すことで
+///   2行目自体を非表示にできる。
 /// - [idOf]: 選択状態の管理に使う一意なIDを返す(例: URI)。
 /// - [selectedIds]: 選択中のアイテムIDの集合。呼び出し側(ViewModel等)が保持する。
 /// - [onSelectionChanged]: チェックボックス操作時に呼ばれる。
@@ -142,6 +165,7 @@ class DateGroupView<T> extends StatelessWidget {
     required this.items,
     required this.lastModifiedOf,
     required this.labelOf,
+    required this.parentFolderOf,
     required this.idOf,
     required this.selectedIds,
     required this.onSelectionChanged,
@@ -151,6 +175,7 @@ class DateGroupView<T> extends StatelessWidget {
   final List<T> items;
   final int Function(T item) lastModifiedOf;
   final String Function(T item) labelOf;
+  final String Function(T item) parentFolderOf;
   final String Function(T item) idOf;
   final Set<String> selectedIds;
   final void Function(List<String> ids, bool selected) onSelectionChanged;
@@ -197,6 +222,7 @@ class DateGroupView<T> extends StatelessWidget {
         final selected = selectedIds.contains(id);
         return _DateItemRow(
           label: labelOf(item),
+          parentFolder: parentFolderOf(item),
           time: formatNoteDateTime(lastModifiedOf(item), row.group!),
           selected: selected,
           onTap: () => onSelectionChanged([id], !selected),
@@ -271,19 +297,21 @@ class _DateGroupHeaderRow extends StatelessWidget {
 class _DateItemRow extends StatelessWidget {
   const _DateItemRow({
     required this.label,
+    required this.parentFolder,
     required this.time,
     required this.selected,
     required this.onTap,
   });
 
   final String label;
+  final String parentFolder;
   final String time;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    // ファイル名が2行に折り返す場合に備え、高さは固定せず最小44に留める。
+    // 親フォルダ名の2行目が表示される場合に備え、高さは固定せず最小44に留める。
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 44),
       child: GestureDetector(
@@ -309,14 +337,30 @@ class _DateItemRow extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFFF0F0F8),
-                  ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFFF0F0F8),
+                      ),
+                    ),
+                    if (parentFolder.isNotEmpty)
+                      Text(
+                        parentFolder,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF8888AA),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(width: 8),

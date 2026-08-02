@@ -573,6 +573,8 @@ class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
                   items: state.notes,
                   lastModifiedOf: (note) => note.lastModified,
                   labelOf: (note) => note.name,
+                  parentFolderOf: (note) =>
+                      parentFolderPath(note.relativePath, note.name),
                   idOf: (note) => note.uri,
                   selectedIds: state.selectedUris,
                   onSelectionChanged: (uris, selected) =>
