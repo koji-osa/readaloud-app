@@ -96,8 +96,10 @@ void main() {
     await tester.tap(find.text('日付で探す'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Projects/a.md'), findsOneWidget);
-    await tester.tap(find.text('Projects/a.md'));
+    // 日付モードではフォルダ階層を含むrelativePathではなく、ファイル名のみが表示される
+    expect(find.text('Projects/a.md'), findsNothing);
+    expect(find.text('a.md'), findsOneWidget);
+    await tester.tap(find.text('a.md'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('選択したノートを取り込む (1件)'), findsOneWidget);

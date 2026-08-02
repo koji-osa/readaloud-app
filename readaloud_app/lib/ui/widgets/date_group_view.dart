@@ -128,8 +128,9 @@ String formatNoteDateTime(int lastModifiedMillis, DateGroup group) {
 /// 持たないため、常に全グループ・全件を展開表示するシンプルな構成。
 ///
 /// - [lastModifiedOf]: 各アイテムの更新日時(epochミリ秒)を返す。
-/// - [labelOf]: 各アイテムの表示名を返す(フォルダ階層が無いため、
-///   区別のためフルパス等を渡すことを想定)。
+/// - [labelOf]: 各アイテムの表示名を返す。日付モードではフォルダ階層が
+///   視覚的な手がかりにならないため、フルパスではなくファイル名のみを
+///   渡すことを想定する(長いフォルダ名でファイル名が埋もれるのを防ぐため)。
 /// - [idOf]: 選択状態の管理に使う一意なIDを返す(例: URI)。
 /// - [selectedIds]: 選択中のアイテムIDの集合。呼び出し側(ViewModel等)が保持する。
 /// - [onSelectionChanged]: チェックボックス操作時に呼ばれる。
@@ -282,47 +283,52 @@ class _DateItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 44,
+    // ファイル名が2行に折り返す場合に備え、高さは固定せず最小44に留める。
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 44),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: Row(
-          children: [
-            const SizedBox(width: 32),
-            IgnorePointer(
-              child: Checkbox(
-                value: selected,
-                onChanged: (_) {},
-                activeColor: const Color(0xFF7C5CBF),
-                side: const BorderSide(color: Color(0xFF3A3A55)),
-              ),
-            ),
-            const Icon(
-              Icons.description_outlined,
-              size: 18,
-              color: Color(0xFF8888AA),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFFF0F0F8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              const SizedBox(width: 32),
+              IgnorePointer(
+                child: Checkbox(
+                  value: selected,
+                  onChanged: (_) {},
+                  activeColor: const Color(0xFF7C5CBF),
+                  side: const BorderSide(color: Color(0xFF3A3A55)),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              time,
-              style: const TextStyle(
-                fontSize: 12,
+              const Icon(
+                Icons.description_outlined,
+                size: 18,
                 color: Color(0xFF8888AA),
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFFF0F0F8),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                time,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF8888AA),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

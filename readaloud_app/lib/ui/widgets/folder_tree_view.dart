@@ -105,11 +105,20 @@ void _sortChildrenRecursively<T>(
 }
 
 /// [flattenVisibleNodes]が返す1行分のデータ。表示上のインデント計算に[depth]を使う。
+///
+/// [dividerBefore]は、同一階層内で直前の兄弟ノードがディレクトリから
+/// ファイルに切り替わった境目であることを示す(フォルダ群とファイル群の
+/// 視覚的な区切り線を描画するために使う)。
 class VisibleTreeNode<T> {
-  const VisibleTreeNode({required this.node, required this.depth});
+  const VisibleTreeNode({
+    required this.node,
+    required this.depth,
+    this.dividerBefore = false,
+  });
 
   final TreeNode<T> node;
   final int depth;
+  final bool dividerBefore;
 }
 
 /// [expandedPaths]に含まれるディレクトリだけを展開した状態で、
@@ -124,11 +133,15 @@ List<VisibleTreeNode<T>> flattenVisibleNodes<T>(
   final result = <VisibleTreeNode<T>>[];
 
   void visit(TreeNode<T> node, int depth) {
+    TreeNode<T>? previousSibling;
     for (final child in node.children) {
-      result.add(VisibleTreeNode<T>(node: child, depth: depth));
+      final dividerBefore =
+          previousSibling != null && previousSibling.isDirectory && !child.isDirectory;
+      result.add(VisibleTreeNode<T>(node: child, depth: depth, dividerBefore: dividerBefore));
       if (child.isDirectory && expandedPaths.contains(child.path)) {
         visit(child, depth + 1);
       }
+      previousSibling = child;
     }
   }
 
@@ -286,7 +299,7 @@ class _TreeRow<T> extends StatelessWidget {
         ? folderCheckState<T>(node, selectedIds, idOf)
         : selectedIds.contains(idOf(node.value as T));
 
-    return SizedBox(
+    final row = SizedBox(
       height: 44,
       child: Row(
         children: [
@@ -350,6 +363,17 @@ class _TreeRow<T> extends StatelessWidget {
           ),
         ],
       ),
+    );
+
+    if (!visible.dividerBefore) return row;
+
+    // フォルダ群からファイル群へ切り替わる境目にのみ、細い区切り線を挟む。
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Divider(height: 1, thickness: 1, color: Color(0xFF3A3A55)),
+        row,
+      ],
     );
   }
 }

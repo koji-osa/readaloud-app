@@ -204,6 +204,22 @@ void main() {
       expect(find.text('yesterday.md'), findsOneWidget);
     });
 
+    testWidgets('ノート名は1行省略ではなく2行までの折り返し表示になる', (tester) async {
+      await tester.pumpWidget(wrap(DateGroupView<_Note>(
+        items: items,
+        lastModifiedOf: (n) => n.lastModified,
+        labelOf: (n) => n.label,
+        idOf: (n) => n.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+        now: now,
+      )));
+
+      final labelText = tester.widget<Text>(find.text('today.md'));
+      expect(labelText.maxLines, 2);
+      expect(labelText.overflow, TextOverflow.ellipsis);
+    });
+
     testWidgets('ノート行タップで単体選択のコールバックが呼ばれる', (tester) async {
       List<String>? calledIds;
       bool? calledSelected;
