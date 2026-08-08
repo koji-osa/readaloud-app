@@ -572,7 +572,9 @@ class _ObsidianTabState extends ConsumerState<_ObsidianTab> {
               : DateGroupView(
                   items: state.notes,
                   lastModifiedOf: (note) => note.lastModified,
-                  labelOf: (note) => note.relativePath,
+                  labelOf: (note) => note.name,
+                  parentFolderOf: (note) =>
+                      parentFolderPath(note.relativePath, note.name),
                   idOf: (note) => note.uri,
                   selectedIds: state.selectedUris,
                   onSelectionChanged: (uris, selected) =>
