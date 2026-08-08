@@ -129,8 +129,12 @@ String formatNoteDateTime(int lastModifiedMillis, DateGroup group) {
 /// ファイル名の下に添える補助表示として使う。ルート直下のファイル
 /// ([relativePath]と[name]が一致する場合)は親フォルダを持たないため
 /// 空文字を返す(呼び出し側は空文字の場合、行自体を表示しない)。
+///
+/// [relativePath]が[name]で終わらない想定外の入力の場合はクラッシュを
+/// 避けるため空文字を返す。
 String parentFolderPath(String relativePath, String name) {
   if (relativePath == name) return '';
+  if (!relativePath.endsWith(name)) return '';
 
   final withoutName = relativePath.substring(
     0,
