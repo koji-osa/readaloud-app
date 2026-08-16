@@ -165,6 +165,73 @@ void main() {
       expect(visible.map((v) => v.node.name), ['folder', 'sub', 'c.md']);
       expect(visible.firstWhere((v) => v.node.name == 'c.md').depth, 2);
     });
+
+    test('同一階層でフォルダからファイルに切り替わる最初のノードにdividerBeforeが立つ', () {
+      final items = [
+        const _Item('folder/a.md', 'id-a'),
+        const _Item('root.md', 'id-root'),
+        const _Item('root2.md', 'id-root2'),
+      ];
+      final root = buildTree<_Item>(items: items, pathOf: (i) => i.path);
+
+      final visible = flattenVisibleNodes<_Item>(root, {});
+
+      expect(visible.map((v) => v.node.name), ['folder', 'root.md', 'root2.md']);
+      expect(visible.firstWhere((v) => v.node.name == 'folder').dividerBefore, isFalse);
+      expect(visible.firstWhere((v) => v.node.name == 'root.md').dividerBefore, isTrue);
+      expect(visible.firstWhere((v) => v.node.name == 'root2.md').dividerBefore, isFalse);
+    });
+
+    test('展開されたフォルダの子の後、次のファイル兄弟にもdividerBeforeが立つ', () {
+      final items = [
+        const _Item('folder/a.md', 'id-a'),
+        const _Item('root.md', 'id-root'),
+      ];
+      final root = buildTree<_Item>(items: items, pathOf: (i) => i.path);
+
+      final visible = flattenVisibleNodes<_Item>(root, {'folder'});
+
+      expect(visible.map((v) => v.node.name), ['folder', 'a.md', 'root.md']);
+      // a.mdはfolder配下の子(トップレベルの兄弟ではない)なのでdividerは立たない
+      expect(visible.firstWhere((v) => v.node.name == 'a.md').dividerBefore, isFalse);
+      // root.mdはトップレベルでfolderの直後のファイルなのでdividerが立つ
+      expect(visible.firstWhere((v) => v.node.name == 'root.md').dividerBefore, isTrue);
+    });
+
+    test('サブフォルダ内(depth > 0)でフォルダ→ファイルに切り替わってもdividerBeforeは立たない', () {
+      final items = [
+        const _Item('folder/sub/a.md', 'id-a'),
+        const _Item('folder/root.md', 'id-root'),
+      ];
+      final root = buildTree<_Item>(items: items, pathOf: (i) => i.path);
+
+      final visible = flattenVisibleNodes<_Item>(root, {'folder'});
+
+      expect(visible.map((v) => v.node.name), ['folder', 'sub', 'root.md']);
+      // folder配下(depth 1)は sub(ディレクトリ) → root.md(ファイル)の切り替わりだが、
+      // ルート階層(depth 0)ではないためdividerは立たない
+      expect(visible.firstWhere((v) => v.node.name == 'root.md').dividerBefore, isFalse);
+    });
+
+    test('ディレクトリのみ、またはファイルのみの階層ではdividerBeforeは立たない', () {
+      final onlyFiles = buildTree<_Item>(
+        items: [const _Item('a.md', 'id-a'), const _Item('b.md', 'id-b')],
+        pathOf: (i) => i.path,
+      );
+      expect(
+        flattenVisibleNodes<_Item>(onlyFiles, {}).every((v) => !v.dividerBefore),
+        isTrue,
+      );
+
+      final onlyFolders = buildTree<_Item>(
+        items: [const _Item('a/x.md', 'id-x'), const _Item('b/y.md', 'id-y')],
+        pathOf: (i) => i.path,
+      );
+      expect(
+        flattenVisibleNodes<_Item>(onlyFolders, {}).every((v) => !v.dividerBefore),
+        isTrue,
+      );
+    });
   });
 
   group('collectLeafIds / folderCheckState', () {
@@ -317,6 +384,37 @@ void main() {
 
       expect(calledIds, unorderedEquals(['id-a', 'id-b']));
       expect(calledSelected, isFalse);
+    });
+
+    testWidgets('フォルダ群とルート直下ファイル群の境目に区切り線が表示される', (tester) async {
+      await tester.pumpWidget(wrap(FolderTreeView<_Item>(
+        items: items,
+        pathOf: (i) => i.path,
+        idOf: (i) => i.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+      )));
+
+      // items = [folder/a.md, folder/b.md, root.md] → トップレベルは [folder, root.md]
+      expect(find.byType(Divider), findsOneWidget);
+
+      final dividerY = tester.getTopLeft(find.byType(Divider)).dy;
+      final folderY = tester.getTopLeft(find.text('folder')).dy;
+      final rootY = tester.getTopLeft(find.text('root.md')).dy;
+      expect(dividerY, greaterThan(folderY));
+      expect(dividerY, lessThan(rootY));
+    });
+
+    testWidgets('フォルダのみ、またはファイルのみの場合は区切り線が表示されない', (tester) async {
+      await tester.pumpWidget(wrap(FolderTreeView<_Item>(
+        items: const [_Item('a.md', 'id-a'), _Item('b.md', 'id-b')],
+        pathOf: (i) => i.path,
+        idOf: (i) => i.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+      )));
+
+      expect(find.byType(Divider), findsNothing);
     });
 
     testWidgets('sortKeyOfを渡すと展開したフォルダ内のファイルが降順で表示される', (tester) async {

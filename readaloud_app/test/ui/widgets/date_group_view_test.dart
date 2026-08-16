@@ -3,10 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/ui/widgets/date_group_view.dart';
 
 class _Note {
-  const _Note(this.id, this.label, this.lastModified);
+  const _Note(this.id, this.label, this.lastModified, [this.parentFolder = '']);
   final String id;
   final String label;
   final int lastModified;
+  final String parentFolder;
 }
 
 DateTime _at(int year, int month, int day, [int hour = 12, int minute = 0]) =>
@@ -179,6 +180,28 @@ void main() {
     });
   });
 
+  group('parentFolderPath', () {
+    test('フォルダ階層があればファイル名を除いた部分を返す', () {
+      expect(parentFolderPath('Projects/AI/note.md', 'note.md'), 'Projects/AI');
+    });
+
+    test('1階層のみでもファイル名を除いた部分を返す', () {
+      expect(parentFolderPath('Projects/note.md', 'note.md'), 'Projects');
+    });
+
+    test('ルート直下のファイル(relativePathとnameが一致)は空文字を返す', () {
+      expect(parentFolderPath('note.md', 'note.md'), '');
+    });
+
+    test('nameがrelativePathの末尾と一致しない想定外の入力は空文字を返す', () {
+      expect(parentFolderPath('Projects/AI/note.md', 'other.md'), '');
+    });
+
+    test('nameがrelativePathより長い想定外の入力は空文字を返す', () {
+      expect(parentFolderPath('note.md', 'long-note-name.md'), '');
+    });
+  });
+
   group('DateGroupView (widget)', () {
     Widget wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
 
@@ -192,6 +215,7 @@ void main() {
         items: items,
         lastModifiedOf: (n) => n.lastModified,
         labelOf: (n) => n.label,
+        parentFolderOf: (n) => n.parentFolder,
         idOf: (n) => n.id,
         selectedIds: const {},
         onSelectionChanged: (_, __) {},
@@ -204,6 +228,100 @@ void main() {
       expect(find.text('yesterday.md'), findsOneWidget);
     });
 
+    testWidgets('ノート名は1行で省略表示になる', (tester) async {
+      await tester.pumpWidget(wrap(DateGroupView<_Note>(
+        items: items,
+        lastModifiedOf: (n) => n.lastModified,
+        labelOf: (n) => n.label,
+        parentFolderOf: (n) => n.parentFolder,
+        idOf: (n) => n.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+        now: now,
+      )));
+
+      final labelText = tester.widget<Text>(find.text('today.md'));
+      expect(labelText.maxLines, 1);
+      expect(labelText.overflow, TextOverflow.ellipsis);
+    });
+
+    testWidgets('親フォルダがあるノートは2行目に親フォルダ名が表示される', (tester) async {
+      final itemsWithFolder = [
+        _Note(
+          'id-today',
+          'today.md',
+          _at(2026, 7, 30, 9, 0).millisecondsSinceEpoch,
+          'Projects/AI',
+        ),
+      ];
+
+      await tester.pumpWidget(wrap(DateGroupView<_Note>(
+        items: itemsWithFolder,
+        lastModifiedOf: (n) => n.lastModified,
+        labelOf: (n) => n.label,
+        parentFolderOf: (n) => n.parentFolder,
+        idOf: (n) => n.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+        now: now,
+      )));
+
+      expect(find.text('today.md'), findsOneWidget);
+      expect(find.text('Projects/AI'), findsOneWidget);
+    });
+
+    testWidgets('異なるフォルダの同名ファイルは親フォルダ名で区別できる', (tester) async {
+      final sameNameItems = [
+        _Note(
+          'id-a',
+          'note.md',
+          _at(2026, 7, 30, 9, 0).millisecondsSinceEpoch,
+          'Projects/AI',
+        ),
+        _Note(
+          'id-b',
+          'note.md',
+          _at(2026, 7, 30, 8, 0).millisecondsSinceEpoch,
+          'Diary/2026',
+        ),
+      ];
+
+      await tester.pumpWidget(wrap(DateGroupView<_Note>(
+        items: sameNameItems,
+        lastModifiedOf: (n) => n.lastModified,
+        labelOf: (n) => n.label,
+        parentFolderOf: (n) => n.parentFolder,
+        idOf: (n) => n.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+        now: now,
+      )));
+
+      expect(find.text('note.md'), findsNWidgets(2));
+      expect(find.text('Projects/AI'), findsOneWidget);
+      expect(find.text('Diary/2026'), findsOneWidget);
+    });
+
+    testWidgets('親フォルダがないノート(ルート直下)は2行目自体が表示されない', (tester) async {
+      await tester.pumpWidget(wrap(DateGroupView<_Note>(
+        items: items,
+        lastModifiedOf: (n) => n.lastModified,
+        labelOf: (n) => n.label,
+        parentFolderOf: (n) => n.parentFolder,
+        idOf: (n) => n.id,
+        selectedIds: const {},
+        onSelectionChanged: (_, __) {},
+        now: now,
+      )));
+
+      // items内の全ノートはparentFolderが空文字(デフォルト値)。
+      final row = tester.widget<Column>(find.ancestor(
+        of: find.text('today.md'),
+        matching: find.byType(Column),
+      ));
+      expect(row.children, hasLength(1));
+    });
+
     testWidgets('ノート行タップで単体選択のコールバックが呼ばれる', (tester) async {
       List<String>? calledIds;
       bool? calledSelected;
@@ -212,6 +330,7 @@ void main() {
         items: items,
         lastModifiedOf: (n) => n.lastModified,
         labelOf: (n) => n.label,
+        parentFolderOf: (n) => n.parentFolder,
         idOf: (n) => n.id,
         selectedIds: const {},
         onSelectionChanged: (ids, selected) {
@@ -236,6 +355,7 @@ void main() {
         items: items,
         lastModifiedOf: (n) => n.lastModified,
         labelOf: (n) => n.label,
+        parentFolderOf: (n) => n.parentFolder,
         idOf: (n) => n.id,
         selectedIds: const {},
         onSelectionChanged: (ids, selected) {
