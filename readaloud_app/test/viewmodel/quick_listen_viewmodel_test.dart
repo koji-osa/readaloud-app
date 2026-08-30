@@ -92,6 +92,75 @@ void main() {
       expect(contentRepo.saved, hasLength(1));
       expect(second, same(first));
     });
+
+    test('save()を同時(Future.wait)に呼んでも二重保存されず、両方の呼び出し元が同じ結果を受け取る'
+        '（concurrent double tap対策）', () async {
+      viewModel.start(QuickListenSession(text: '同時タップされるテキスト'));
+
+      final results = await Future.wait([viewModel.save(), viewModel.save()]);
+
+      expect(contentRepo.saved, hasLength(1));
+      expect(results[0], isNotNull);
+      // 2回目の呼び出しが1回目の完了を待たずに古い状態(null)を返してしまう
+      // 回帰がないことを確認する。
+      expect(results[1], same(results[0]));
+    });
+
+    test('save()実行中に新しい共有でセッションが置き換わっても、完了時に古いセッションの状態で上書きしない',
+        () async {
+      viewModel.start(QuickListenSession(text: '保存対象だったテキストA'));
+      final pendingSave = viewModel.save();
+
+      // 保存が完了する前（マイクロタスクが進む前）に新しい共有が届いたケースを再現
+      viewModel.start(QuickListenSession(text: 'B（Aの保存中に届いた新しい共有）'));
+
+      final result = await pendingSave;
+
+      expect(result, isNotNull);
+      expect(contentRepo.saved, hasLength(1));
+      expect(contentRepo.saved.single.body, '保存対象だったテキストA');
+      // 画面には新しいセッションBがそのまま表示され続け、Aの保存完了によって
+      // 上書きされていないこと（=表示中テキストが勝手に巻き戻らないこと）を確認
+      expect(viewModel.state.session!.text, 'B（Aの保存中に届いた新しい共有）');
+      expect(viewModel.state.hasSaved, isFalse);
+    });
+
+    test('save()が失敗した場合は何も保存されず、再試行(retry)で成功した時だけ1件保存される',
+        () async {
+      contentRepo.failNextSaves = 1;
+      viewModel.start(QuickListenSession(text: '失敗後にリトライするテキスト'));
+
+      final failedResult = await viewModel.save();
+      expect(failedResult, isNull);
+      expect(contentRepo.saved, isEmpty);
+      expect(viewModel.state.hasSaved, isFalse);
+      expect(viewModel.state.errorMessage, isNotNull);
+
+      final retryResult = await viewModel.save();
+
+      expect(retryResult, isNotNull);
+      expect(contentRepo.saved, hasLength(1));
+      expect(viewModel.state.hasSaved, isTrue);
+    });
+
+    test('start()で既存セッションが再生中に新しい共有が来ると、旧セッションの音声を止めてから置き換える', () async {
+      viewModel.start(QuickListenSession(text: '旧テキスト'));
+      await viewModel.play();
+      expect(ttsService.speakCalls, hasLength(1));
+
+      viewModel.start(QuickListenSession(text: '新しいテキスト'));
+
+      // 旧セッションの音声がstop()されたことを確認（新テキストが混ざって聞こえる回帰を防止）
+      expect(ttsService.stopCalls, greaterThanOrEqualTo(1));
+      expect(viewModel.state.session!.text, '新しいテキスト');
+      expect(viewModel.state.isPlaying, isFalse);
+    });
+
+    test('最初のstart()（既存セッションなし）ではTTSのstop()を余計に呼ばない', () {
+      viewModel.start(QuickListenSession(text: '最初のテキスト'));
+
+      expect(ttsService.stopCalls, 0);
+    });
   });
 }
 
@@ -148,8 +217,15 @@ class _FakeSettingsRepository implements SettingsRepository {
 class _FakeContentRepository implements ContentRepository {
   final List<Content> saved = [];
 
+  /// 次のsave()呼び出しをこの回数だけ失敗させる（retryテスト用）。
+  int failNextSaves = 0;
+
   @override
   Future<void> save(Content content) async {
+    if (failNextSaves > 0) {
+      failNextSaves--;
+      throw Exception('保存に失敗しました（テスト用）');
+    }
     saved.add(content);
   }
 

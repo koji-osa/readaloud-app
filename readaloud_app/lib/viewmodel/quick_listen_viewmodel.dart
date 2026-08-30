@@ -90,7 +90,22 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
 
   /// 新しい共有テキストでセッションを開始する。
   /// 既存セッションがある場合はMVP仕様として単純に置き換える（DB操作なし）。
+  ///
+  /// 置き換え前のセッションが再生中・一時停止中だった場合、明示的に停止しないと
+  /// 画面上は新しいテキストを表示しているのに音声だけ旧テキストのまま再生され
+  /// 続けてしまう（TtsAudioHandlerは単一インスタンスのため）。そのため置き換え時は
+  /// 必ずTTSと使用量カウントを止めてから新しいセッションを設定する。
   void start(QuickListenSession session) {
+    if (state.session != null) {
+      // ignore: discarded_futures
+      _ttsService.stop();
+      // ignore: discarded_futures
+      _countUsage.stopCounting('quick-listen');
+    }
+    // 直前のセッションに対するsave()が進行中でも、新セッションのsave()は
+    // それに相乗りせず必ず新しいSaveContentUseCase呼び出しを行うようにする。
+    // （古いFutureの完了結果は_performSave側のセッションIDガードで無視される）
+    _pendingSave = null;
     state = QuickListenState(session: session);
   }
 
@@ -131,13 +146,24 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
     state = const QuickListenState();
   }
 
-  /// 通常Contentへ昇格保存する（DBへは初めてここで1回だけ書き込む）。
-  /// 既に保存済み・保存処理中の場合は何もせず既存の結果を返す（二重保存防止）。
-  Future<Content?> save() async {
-    final session = state.session;
-    if (session == null) return null;
-    if (state.isSaving || state.hasSaved) return state.savedContent;
+  Future<Content?>? _pendingSave;
 
+  /// 通常Contentへ昇格保存する（DBへは初めてここで1回だけ書き込む）。
+  ///
+  /// 既に保存済みならその結果を即返す。保存処理が進行中の場合は新たに
+  /// SaveContentUseCaseを呼ばず、進行中のFutureをそのまま返す。
+  /// （isSavingフラグだけで早期returnすると、ほぼ同時に呼ばれた2回目の
+  /// 呼び出しが「まだ完了していない1回目の結果」を待たずにnullを返してしまい、
+  /// concurrent double tapで片方の呼び出し元が保存成功を検知できなくなる。
+  /// Futureそのものを共有することで両方の呼び出し元が同じ結果を受け取れる。）
+  Future<Content?> save() {
+    final session = state.session;
+    if (session == null) return Future.value(null);
+    if (state.hasSaved) return Future.value(state.savedContent);
+    return _pendingSave ??= _performSave(session);
+  }
+
+  Future<Content?> _performSave(QuickListenSession session) async {
     state = state.copyWith(isSaving: true, errorMessage: null);
     try {
       final content = await _saveContent.execute(
@@ -145,18 +171,27 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
         sourceType: session.sourceType,
         title: session.title,
       );
-      state = state.copyWith(
-        isSaving: false,
-        savedContent: content,
-        session: session.copyWith(saved: true),
-      );
+      // 保存中に新しい共有でセッションが置き換わっていた場合、完了時に
+      // 古いセッションの状態で現在の画面を上書きしない（DBへの保存自体は
+      // 成功しているのでcontentはそのまま返す）。
+      if (state.session?.id == session.id) {
+        state = state.copyWith(
+          isSaving: false,
+          savedContent: content,
+          session: session.copyWith(saved: true),
+        );
+      }
       return content;
     } catch (e) {
-      state = state.copyWith(
-        isSaving: false,
-        errorMessage: '保存に失敗しました: $e',
-      );
+      if (state.session?.id == session.id) {
+        state = state.copyWith(
+          isSaving: false,
+          errorMessage: '保存に失敗しました: $e',
+        );
+      }
       return null;
+    } finally {
+      _pendingSave = null;
     }
   }
 

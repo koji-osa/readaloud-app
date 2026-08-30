@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/home/home_screen.dart';
 import 'ui/add/add_screen.dart';
+import 'ui/player/player_screen.dart';
 import 'ui/quick_listen/quick_listen_screen.dart';
 import 'repository/settings_repository.dart';
 import 'repository/impl/settings_repository_impl.dart';
@@ -94,15 +95,23 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
 
   Future<void> _checkInitialShareIntent() async {
     final payload = await _shareIntentHandler.getInitialSharedPayload();
-    if (payload != null) _handleSharedPayload(payload);
+    if (payload != null) await _handleSharedPayload(payload);
   }
 
   // URL共有は既存のWeb import(URLタブ)へ、通常テキストの共有はQuick Listenへ振り分ける。
   // アプリ内部の「テキスト追加」はここを経由しないため、従来どおり手動保存のまま。
-  void _handleSharedPayload(SharedTextPayload payload) {
+  Future<void> _handleSharedPayload(SharedTextPayload payload) async {
     if (!mounted) return;
     final value = payload.value.trim();
     if (value.isEmpty) return;
+
+    // 通常Content再生・Quick Listen再生のいずれかが裏で継続していると、
+    // 単一のTtsAudioHandlerを取り合って状態汚染やTTS使用量の二重カウントに
+    // つながるため、新しい共有を処理する前に両方とも明示的に停止しておく。
+    await ref.read(playerViewModelProvider.notifier).stop();
+    await ref.read(quickListenViewModelProvider.notifier).close();
+    if (!mounted) return;
+
     if (payload.kind == SharedContentKind.url) {
       Navigator.of(context).push(
         MaterialPageRoute(

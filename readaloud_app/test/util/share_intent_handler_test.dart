@@ -55,5 +55,39 @@ void main() {
       expect(payload, isNotNull);
       expect(payload!.kind, SharedContentKind.text);
     });
+
+    test('http://・https://いずれもネイティブ側がURL型であればurlとして分類される', () {
+      final httpsPayload = ShareIntentHandler.classify([
+        _file(value: 'https://example.com/article', type: SharedMediaType.URL),
+      ]);
+      final httpPayload = ShareIntentHandler.classify([
+        _file(value: 'http://example.com/article', type: SharedMediaType.URL),
+      ]);
+
+      expect(httpsPayload!.kind, SharedContentKind.url);
+      expect(httpPayload!.kind, SharedContentKind.url);
+    });
+
+    test('URLを含む通常文章はネイティブ側でTEXT判定されるため、Quick Listen対象のtextのまま扱う', () {
+      // URLUtil.isValidUrl()は文字列全体が厳密なURLである場合のみtrueになるため、
+      // 前後に文章が付くとネイティブ側でTEXT判定される。ここではその前提を
+      // Dart側のclassify()が正しく尊重する（勝手にURL扱いへ格上げしない）ことを確認する。
+      final payload = ShareIntentHandler.classify([
+        _file(
+          value: 'これ面白かった見て https://example.com/article',
+          type: SharedMediaType.TEXT,
+        ),
+      ]);
+
+      expect(payload!.kind, SharedContentKind.text);
+    });
+
+    test('valueの前後空白はclassify()では保持され、トリムは呼び出し側の責務とする', () {
+      final payload = ShareIntentHandler.classify([
+        _file(value: '  https://example.com/article  ', type: SharedMediaType.URL),
+      ]);
+
+      expect(payload!.value, '  https://example.com/article  ');
+    });
   });
 }

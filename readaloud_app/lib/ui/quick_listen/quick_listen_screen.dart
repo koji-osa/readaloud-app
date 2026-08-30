@@ -50,15 +50,15 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(quickListenViewModelProvider.notifier).start(
-            QuickListenSession(
-              text: widget.initialText,
-              title: widget.initialTitle,
-            ),
-          );
-    });
+    // ref.read()はinitState内でも安全（ref.watchのみ避ければよい）。
+    // postFrameCallbackを介さないことで、セッション未設定の空表示が一瞬
+    // 出てしまう問題も避けられる。
+    ref.read(quickListenViewModelProvider.notifier).start(
+          QuickListenSession(
+            text: widget.initialText,
+            title: widget.initialTitle,
+          ),
+        );
   }
 
   Future<void> _close() async {
