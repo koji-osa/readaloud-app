@@ -54,8 +54,8 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
     // postFrameCallbackを介さないことで、セッション未設定の空表示が一瞬
     // 出てしまう問題も避けられる。
     ref.read(quickListenViewModelProvider.notifier).start(
-          QuickListenSession(
-            text: widget.initialText,
+          QuickListenSession.fromSharedText(
+            widget.initialText,
             title: widget.initialTitle,
           ),
         );
