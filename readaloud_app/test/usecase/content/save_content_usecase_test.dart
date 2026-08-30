@@ -41,6 +41,21 @@ void main() {
       expect(content.vaultName, isNull);
       expect(content.relativePath, isNull);
     });
+
+    // Quick Listen導入により、共有経由のテキストはsourceType: 'share'として
+    // 保存されるようになった(従来のtext tab経由の手動保存は'text'のまま)。
+    // タイトル自動生成ロジックが両者で同じ挙動(本文先頭30文字)であることを
+    // 固定し、将来'share'にだけ異なる生成ルールが誤って追加されないようにする。
+    test('sourceType:shareのタイトル自動生成はsourceType:textと同じ(本文先頭30文字)', () async {
+      const body = 'これはQuick Listenで共有されたテキストの本文サンプルです。三十文字を超える長さにしています。';
+
+      final shareContent =
+          await useCase.execute(body: body, sourceType: 'share');
+      final textContent =
+          await useCase.execute(body: body, sourceType: 'text');
+
+      expect(shareContent.title, textContent.title);
+    });
   });
 }
 
