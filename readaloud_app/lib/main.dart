@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/home/home_screen.dart';
 import 'ui/add/add_screen.dart';
+import 'ui/quick_listen/quick_listen_screen.dart';
 import 'repository/settings_repository.dart';
 import 'repository/impl/settings_repository_impl.dart';
 import 'repository/tts/device_tts_service.dart';
@@ -86,25 +87,32 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
 
   void _initShareIntent() {
     _shareIntentHandler = ShareIntentHandler(
-      onTextReceived: (text) {
-        if (mounted) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => AddScreen(initialText: text),
-            ),
-          );
-        }
-      },
+      onPayloadReceived: _handleSharedPayload,
     );
     _shareIntentHandler.startListening();
   }
 
   Future<void> _checkInitialShareIntent() async {
-    final text = await _shareIntentHandler.getInitialSharedText();
-    if (text != null && mounted) {
+    final payload = await _shareIntentHandler.getInitialSharedPayload();
+    if (payload != null) _handleSharedPayload(payload);
+  }
+
+  // URL共有は既存のWeb import(URLタブ)へ、通常テキストの共有はQuick Listenへ振り分ける。
+  // アプリ内部の「テキスト追加」はここを経由しないため、従来どおり手動保存のまま。
+  void _handleSharedPayload(SharedTextPayload payload) {
+    if (!mounted) return;
+    final value = payload.value.trim();
+    if (value.isEmpty) return;
+    if (payload.kind == SharedContentKind.url) {
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => AddScreen(initialText: text),
+          builder: (_) => AddScreen(initialUrl: value),
+        ),
+      );
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => QuickListenScreen(initialText: value),
         ),
       );
     }

@@ -46,7 +46,8 @@ final obsidianImportViewModelProvider = StateNotifierProvider.autoDispose<
 
 class AddScreen extends ConsumerStatefulWidget {
   final String? initialText; // Share Intentから渡されるテキスト
-  const AddScreen({super.key, this.initialText});
+  final String? initialUrl; // Share Intentから渡されたURL（既存Web import経由）
+  const AddScreen({super.key, this.initialText, this.initialUrl});
 
   @override
   ConsumerState<AddScreen> createState() => _AddScreenState();
@@ -61,9 +62,16 @@ class _AddScreenState extends ConsumerState<AddScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(
+      length: 4,
+      vsync: this,
+      initialIndex: widget.initialUrl != null ? 1 : 0, // URL共有時はURLタブを開く
+    );
     if (widget.initialText != null) {
       _textController.text = widget.initialText!;
+    }
+    if (widget.initialUrl != null) {
+      _urlController.text = widget.initialUrl!;
     }
   }
 
