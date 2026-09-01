@@ -244,11 +244,53 @@ void main() {
         expect(line, isNot(contains('本文が漏れないことを確認するテキスト')));
       }
     });
+
+    test(
+        'play()がDebugLogger.logEvent()のawaitで止まっている間にpositionStreamの'
+        '更新でstateが変化しても、記録値と実際にspeak()へ渡されたstartPositionは一致する'
+        '（食い違いのregression防止）', () async {
+      final logGate = Completer<void>();
+      DebugLogger.testAwaitHook = () => logGate.future;
+      addTearDown(() => DebugLogger.testAwaitHook = null);
+
+      viewModel.start(QuickListenSession(text: 'レース条件を検証するテキスト'));
+
+      final playFuture = viewModel.play();
+      // play()内部がtts_play_requestedのlogEvent()（testAwaitHook）で
+      // 止まるまでマイクロタスクを進める。
+      await Future.delayed(Duration.zero);
+
+      // ログ書き込み待ちの間に、positionStream経由でhighlightPositionが
+      // 変化する（症状1調査で見つかった競合パターンを再現）。
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 777,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+      await Future.delayed(Duration.zero);
+      expect(viewModel.state.highlightPosition, 777,
+          reason: 'レースを起こすための前提: ログ待ち中にstateが変化していること');
+
+      logGate.complete();
+      await playFuture;
+
+      expect(ttsService.speakStartPositions, hasLength(1));
+      final actualStartPosition = ttsService.speakStartPositions.single;
+      // play()呼び出し時点のhighlightPosition(0)のまま一貫しているべきで、
+      // ログ待ち中に届いた777に引きずられてはいけない。
+      expect(actualStartPosition, 0);
+
+      final requestedLine = DebugLogger.testSink!
+          .firstWhere((l) => l.contains('event=tts_play_requested'));
+      expect(requestedLine, contains('startPositionPassedToSpeak=$actualStartPosition'));
+      expect(requestedLine, contains('highlightPositionAtPlayCall=$actualStartPosition'));
+    });
   });
 }
 
 class _FakeTtsService implements TtsService {
   final List<String> speakCalls = [];
+  final List<int> speakStartPositions = [];
   int stopCalls = 0;
   int pauseCalls = 0;
 
@@ -262,6 +304,7 @@ class _FakeTtsService implements TtsService {
     String? voiceId,
   }) async {
     speakCalls.add(text);
+    speakStartPositions.add(startPosition);
   }
 
   @override

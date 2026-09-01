@@ -251,8 +251,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _chunks = _splitText(text, startPosition);
     _currentChunkIndex = 0;
 
-    // Observability: 実際にエンジンへ渡された開始位置を記録（本文は含めない）
-    await DebugLogger.instance.logEvent('tts_play_started', {
+    // Observability: 実際にエンジンへ渡された開始位置を記録（本文は含めない）。
+    // この時点ではまだ_playChunk()/_tts.speak()を呼んでおらず実際の発話は
+    // 開始していないため、誤解を避けるためイベント名は"prepared"とする。
+    await DebugLogger.instance.logEvent('tts_play_prepared', {
       'requestedStartPosition': startPosition,
       'chunkCount': _chunks.length,
       'firstChunkStartPosition': _chunks.isNotEmpty ? _chunks.first.startPosition : -1,

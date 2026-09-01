@@ -141,22 +141,27 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
       final defaultSpeedStr =
           await _settingsRepo.get(SettingKeys.defaultSpeed) ?? '1.0';
       final speed = double.tryParse(defaultSpeedStr) ?? 1.0;
+      // ログ記録前にhighlightPositionをスナップショットし、CountTtsUsage・
+      // ログ・speak()の全てで同じ値を使う。await(_settingsRepo.get/logEvent)の
+      // 間にpositionStreamの更新でstateが変化しても、記録値と実際にspeak()へ
+      // 渡す値が食い違わないようにするため。
+      final startPosition = state.highlightPosition;
       _countUsage.startCounting(
         contentId: 'quick-listen:${session.id}',
         totalChars: session.text.length,
-        startPosition: state.highlightPosition,
+        startPosition: startPosition,
       );
       // Observability(症状1優先): play()直前のhighlightPositionと、
       // speak()へ渡すstartPositionを記録する（本文は含めない）。
       await DebugLogger.instance.logEvent('tts_play_requested', {
         'origin': 'quick_listen',
         'sessionId': session.id,
-        'highlightPositionAtPlayCall': state.highlightPosition,
-        'startPositionPassedToSpeak': state.highlightPosition,
+        'highlightPositionAtPlayCall': startPosition,
+        'startPositionPassedToSpeak': startPosition,
       });
       await _ttsService.speak(
         text: session.text,
-        startPosition: state.highlightPosition,
+        startPosition: startPosition,
         speed: speed,
       );
       state = state.copyWith(isPlaying: true);

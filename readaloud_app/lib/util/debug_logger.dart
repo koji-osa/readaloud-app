@@ -12,6 +12,17 @@ class DebugLogger {
   File? _logFile;
   bool _isInitialized = false;
 
+  // 実ファイルへの書き込みを直列化するためのキュー。unawaited(logEvent(...))が
+  // 複数並行して呼ばれても、書き込みが呼び出し順と異なる順序で完了したり
+  // 相互に破壊したりしないようにする。
+  Future<void> _writeQueue = Future<void>.value();
+
+  // logEvent呼び出し順を示す単調増加シーケンス番号。
+  // ファイルI/O自体は非同期のため完了順が呼び出し順と一致する保証がなくても、
+  // このseqを見れば実際のイベント発生順を再構成できる。
+  int _seqCounter = 0;
+  int _nextSeq() => ++_seqCounter;
+
   // progressHandler前後のログ件数制限
   static const int _preBufferSize = 5;
   static const int _postLogCount = 10;
@@ -20,9 +31,14 @@ class DebugLogger {
   bool _isPostLogging = false;        // 再開後のログ記録中フラグ
 
   /// アプリ起動時に呼ぶ。ログファイルを初期化する。
-  Future<void> init({required String appVersion}) async {
+  /// [overrideDirectory]はunit testからpath_providerを介さずログ出力先を
+  /// 指定するためのフック（本番経路では常にnull）。
+  Future<void> init({
+    required String appVersion,
+    Directory? overrideDirectory,
+  }) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
+      final dir = overrideDirectory ?? await getApplicationDocumentsDirectory();
       final now = DateTime.now();
       final timestamp =
           '${now.year}${_pad(now.month)}${_pad(now.day)}_${_pad(now.hour)}${_pad(now.minute)}${_pad(now.second)}';
@@ -44,9 +60,18 @@ class DebugLogger {
     }
   }
 
-  /// ログを追記する
-  Future<void> log(String message) async {
-    if (!_isInitialized || _logFile == null) return;
+  /// ログを追記する。
+  /// 実ファイルへの書き込みは[_writeQueue]で直列化されるため、複数箇所から
+  /// ほぼ同時に呼ばれても書き込み順が呼び出し順と食い違ったり、書き込み同士が
+  /// 衝突したりしない。
+  Future<void> log(String message) {
+    if (!_isInitialized || _logFile == null) return Future.value();
+    final result = _writeQueue.then((_) => _writeLine(message));
+    _writeQueue = result.catchError((_) {});
+    return result;
+  }
+
+  Future<void> _writeLine(String message) async {
     try {
       final now = DateTime.now();
       final time =
@@ -143,7 +168,8 @@ class DebugLogger {
   // 構造化イベントログ。body/word/url/clipboard/titleに相当するキーは
   // 値に関わらず無条件で除外する（Privacy方針：本文・URL・clipboard・titleを
   // 一切記録しない）。位置・件数・種別ラベル等の数値/カテゴリ値のみを許可する。
-  static const List<String> _forbiddenKeySubstrings = [
+  // 単語単位（camelCase/snake_case分割後）で完全一致させる禁止語。
+  static const List<String> _forbiddenWords = [
     'body',
     'text',
     'word',
@@ -152,9 +178,17 @@ class DebugLogger {
     'title',
   ];
 
+  // camelCase/snake_caseの単語境界でキー名を分割するための区切り位置。
+  static final RegExp _wordBoundaryPattern =
+      RegExp(r'(?<=[a-z0-9])(?=[A-Z])|_');
+
   static bool isForbiddenKey(String key) {
-    final normalized = key.toLowerCase();
-    return _forbiddenKeySubstrings.any((f) => normalized.contains(f));
+    // 単純な部分文字列一致だと、'context'が禁止語'text'を偶然含んでしまい
+    // 無関係なフィールドまで誤って除外されていた。camelCase/snake_caseの
+    // 単語単位に分割し、単語として完全一致する場合のみ禁止する。
+    final words =
+        key.split(_wordBoundaryPattern).map((w) => w.toLowerCase());
+    return words.any(_forbiddenWords.contains);
   }
 
   /// イベント名とフィールドから1行分のログ文字列を組み立てる（純粋関数・I/Oなし）。
@@ -173,10 +207,21 @@ class DebugLogger {
   /// イベント文字列をこのリストへ追記する（unit testでinit()なしに検証するため）。
   static List<String>? testSink;
 
+  /// テスト用フック。非nullの間はlogEvent()内でこのFutureをawaitしてから
+  /// 記録する。呼び出し元がログ書き込み待ち中にstateを変更した場合の
+  /// レース条件（食い違い）を再現するために使う。
+  static Future<void> Function()? testAwaitHook;
+
   /// 構造化イベントログ。[formatEvent]で本文相当のキーが除外された上で、
   /// 既存の[log]（タイムスタンプ付きファイル追記）へ書き込む。
+  /// 呼び出しごとに単調増加する`seq`を末尾に付与する。unawaited(logEvent(...))が
+  /// 並行して呼ばれ、ファイルへの書き込み完了順が呼び出し順と一致しない場合でも、
+  /// このseqを見れば実機ログから実際のイベント発生順を再構成できる。
   Future<void> logEvent(String name, [Map<String, Object?> fields = const {}]) async {
-    final line = formatEvent(name, fields);
+    final seq = _nextSeq();
+    final line = '${formatEvent(name, fields)} seq=$seq';
+    final hook = testAwaitHook;
+    if (hook != null) await hook();
     final sink = testSink;
     if (sink != null) {
       sink.add(line);

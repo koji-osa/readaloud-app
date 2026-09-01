@@ -19,6 +19,13 @@ class ShareIntentHandler {
   StreamSubscription? _subscription;
   final void Function(SharedTextPayload payload) onPayloadReceived;
 
+  // Observability: initial経路とstream経路は独立して発火しうるため、
+  // 同一呼び出しのshare_received/share_classifiedを対応付けられるよう
+  // 呼び出しごとに一意なflowIdを払い出す（症状1の競合切り分け用の
+  // 最小限の相関情報。本文・URL等は含まない）。
+  static int _flowSeq = 0;
+  static String _nextFlowId(String source) => '$source-${++_flowSeq}';
+
   ShareIntentHandler({required this.onPayloadReceived});
 
   // アプリ起動中の共有を受け取る
@@ -26,11 +33,14 @@ class ShareIntentHandler {
     _subscription = FlutterSharingIntent.instance
         .getMediaStream()
         .listen((List<SharedFile> files) {
-      unawaited(DebugLogger.instance.logEvent('share_received', {'source': 'stream'}));
+      final flowId = _nextFlowId('stream');
+      unawaited(DebugLogger.instance.logEvent(
+          'share_received', {'source': 'stream', 'flowId': flowId}));
       final payload = classify(files);
       unawaited(DebugLogger.instance.logEvent('share_classified', {
         'source': 'stream',
         'kind': payload?.kind.name ?? 'none',
+        'flowId': flowId,
       }));
       if (payload != null) onPayloadReceived(payload);
     });
@@ -38,7 +48,9 @@ class ShareIntentHandler {
 
   // アプリ起動時に共有されたテキストを取得
   Future<SharedTextPayload?> getInitialSharedPayload() async {
-    await DebugLogger.instance.logEvent('share_received', {'source': 'initial'});
+    final flowId = _nextFlowId('initial');
+    await DebugLogger.instance.logEvent(
+        'share_received', {'source': 'initial', 'flowId': flowId});
     final files =
         await FlutterSharingIntent.instance.getInitialSharing();
     // 取得後にリセット（再起動時に同じテキストが表示されないよう）
@@ -47,6 +59,7 @@ class ShareIntentHandler {
     await DebugLogger.instance.logEvent('share_classified', {
       'source': 'initial',
       'kind': payload?.kind.name ?? 'none',
+      'flowId': flowId,
     });
     return payload;
   }
