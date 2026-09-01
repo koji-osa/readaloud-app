@@ -8,6 +8,7 @@ import '../repository/settings_repository.dart';
 import '../repository/tts/tts_service.dart';
 import '../usecase/content/save_content_usecase.dart';
 import '../usecase/tts/count_tts_usage_usecase.dart';
+import '../util/debug_logger.dart';
 
 class QuickListenState {
   final QuickListenSession? session;
@@ -65,6 +66,11 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
 
   StreamSubscription<dynamic>? _positionSubscription;
 
+  // Observability: このViewModelインスタンスがpositionStreamから最初に値を
+  // 受け取ったかどうか。BehaviorSubject経由で前セッション/前画面の値が
+  // 即座に再送される可能性を切り分けるためのフラグ（症状1のEvidence）。
+  bool _hasReceivedPosition = false;
+
   QuickListenViewModel({
     required TtsService ttsService,
     required SettingsRepository settingsRepo,
@@ -80,6 +86,16 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
         super(const QuickListenState()) {
     _positionSubscription = positionStream.listen((data) {
       if (data is! TtsPlaybackPosition) return;
+      final isFirstEvent = !_hasReceivedPosition;
+      _hasReceivedPosition = true;
+      unawaited(DebugLogger.instance.logEvent('tts_position_received', {
+        'origin': 'quick_listen',
+        'sessionId': state.session?.id,
+        'charPosition': data.charPosition,
+        'isPlaying': data.isPlaying,
+        'ttsStatus': data.ttsStatus.name,
+        'isFirstEvent': isFirstEvent,
+      }));
       state = state.copyWith(
         highlightPosition: data.charPosition,
         isPlaying: data.isPlaying,
@@ -96,7 +112,8 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
   /// 続けてしまう（TtsAudioHandlerは単一インスタンスのため）。そのため置き換え時は
   /// 必ずTTSと使用量カウントを止めてから新しいセッションを設定する。
   void start(QuickListenSession session) {
-    if (state.session != null) {
+    final replacedExisting = state.session != null;
+    if (replacedExisting) {
       // ignore: discarded_futures
       _ttsService.stop();
       // ignore: discarded_futures
@@ -106,7 +123,15 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
     // それに相乗りせず必ず新しいSaveContentUseCase呼び出しを行うようにする。
     // （古いFutureの完了結果は_performSave側のセッションIDガードで無視される）
     _pendingSave = null;
+    _hasReceivedPosition = false; // Observability: 新セッションの初回受信を判定し直す
     state = QuickListenState(session: session);
+    unawaited(DebugLogger.instance.logEvent('quick_listen_session_started', {
+      'sessionId': session.id,
+      'charCount': session.text.length,
+      'sourceType': session.sourceType,
+      'replacedExistingSession': replacedExisting,
+      'highlightPositionAtStart': state.highlightPosition,
+    }));
   }
 
   Future<void> play() async {
@@ -121,6 +146,14 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
         totalChars: session.text.length,
         startPosition: state.highlightPosition,
       );
+      // Observability(症状1優先): play()直前のhighlightPositionと、
+      // speak()へ渡すstartPositionを記録する（本文は含めない）。
+      await DebugLogger.instance.logEvent('tts_play_requested', {
+        'origin': 'quick_listen',
+        'sessionId': session.id,
+        'highlightPositionAtPlayCall': state.highlightPosition,
+        'startPositionPassedToSpeak': state.highlightPosition,
+      });
       await _ttsService.speak(
         text: session.text,
         startPosition: state.highlightPosition,
@@ -128,6 +161,10 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
       );
       state = state.copyWith(isPlaying: true);
     } catch (e) {
+      await DebugLogger.instance.logEvent('error', {
+        'context': 'quick_listen_play',
+        'errorType': e.runtimeType.toString(),
+      });
       state = state.copyWith(errorMessage: '再生に失敗しました: $e');
     }
   }

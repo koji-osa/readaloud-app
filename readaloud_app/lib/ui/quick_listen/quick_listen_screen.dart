@@ -10,6 +10,7 @@ import '../../usecase/tts/count_tts_usage_usecase.dart';
 import '../../viewmodel/quick_listen_viewmodel.dart';
 import '../home/home_screen.dart';
 import '../player/widgets/highlight_text.dart';
+import '../../util/debug_logger.dart';
 
 final quickListenViewModelProvider = StateNotifierProvider.autoDispose<
     QuickListenViewModel, QuickListenState>((ref) {
@@ -47,18 +48,31 @@ class QuickListenScreen extends ConsumerStatefulWidget {
 }
 
 class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
+  String? _sessionId;
+
   @override
   void initState() {
     super.initState();
     // ref.read()はinitState内でも安全（ref.watchのみ避ければよい）。
     // postFrameCallbackを介さないことで、セッション未設定の空表示が一瞬
     // 出てしまう問題も避けられる。
-    ref.read(quickListenViewModelProvider.notifier).start(
-          QuickListenSession.fromSharedText(
-            widget.initialText,
-            title: widget.initialTitle,
-          ),
-        );
+    final session = QuickListenSession.fromSharedText(
+      widget.initialText,
+      title: widget.initialTitle,
+    );
+    _sessionId = session.id;
+    ref.read(quickListenViewModelProvider.notifier).start(session);
+    DebugLogger.instance.logEvent('quick_listen_screen_mounted', {
+      'sessionId': _sessionId,
+    });
+  }
+
+  @override
+  void dispose() {
+    DebugLogger.instance.logEvent('quick_listen_screen_disposed', {
+      'sessionId': _sessionId,
+    });
+    super.dispose();
   }
 
   Future<void> _close() async {

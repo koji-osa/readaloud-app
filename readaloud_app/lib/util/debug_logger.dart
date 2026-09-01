@@ -138,4 +138,50 @@ class DebugLogger {
   }
 
   String _pad(int n) => n.toString().padLeft(2, '0');
+
+  // ===== Observability-assisted Device Validation =====
+  // 構造化イベントログ。body/word/url/clipboard/titleに相当するキーは
+  // 値に関わらず無条件で除外する（Privacy方針：本文・URL・clipboard・titleを
+  // 一切記録しない）。位置・件数・種別ラベル等の数値/カテゴリ値のみを許可する。
+  static const List<String> _forbiddenKeySubstrings = [
+    'body',
+    'text',
+    'word',
+    'url',
+    'clipboard',
+    'title',
+  ];
+
+  static bool isForbiddenKey(String key) {
+    final normalized = key.toLowerCase();
+    return _forbiddenKeySubstrings.any((f) => normalized.contains(f));
+  }
+
+  /// イベント名とフィールドから1行分のログ文字列を組み立てる（純粋関数・I/Oなし）。
+  /// 本文相当のキーは[isForbiddenKey]により無条件で除外されるため、
+  /// ファイルI/Oを介さずユニットテストで安全性を検証できる。
+  static String formatEvent(String name, Map<String, Object?> fields) {
+    final buffer = StringBuffer('event=$name');
+    for (final entry in fields.entries) {
+      if (isForbiddenKey(entry.key)) continue;
+      buffer.write(' ${entry.key}=${entry.value}');
+    }
+    return buffer.toString();
+  }
+
+  /// テスト用フック。非nullの間はファイルI/Oを行わず、フォーマット済みの
+  /// イベント文字列をこのリストへ追記する（unit testでinit()なしに検証するため）。
+  static List<String>? testSink;
+
+  /// 構造化イベントログ。[formatEvent]で本文相当のキーが除外された上で、
+  /// 既存の[log]（タイムスタンプ付きファイル追記）へ書き込む。
+  Future<void> logEvent(String name, [Map<String, Object?> fields = const {}]) async {
+    final line = formatEvent(name, fields);
+    final sink = testSink;
+    if (sink != null) {
+      sink.add(line);
+      return;
+    }
+    await log(line);
+  }
 }

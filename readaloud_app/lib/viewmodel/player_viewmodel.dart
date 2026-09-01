@@ -23,6 +23,7 @@ import '../repository/claude_service.dart'; // REQ-034
 import '../repository/groq_service.dart'; // REQ-034
 import '../usecase/tts/check_tts_limit_usecase.dart';
 import '../util/table_debug_logger.dart'; // FIX-056
+import '../util/debug_logger.dart';
 
 class PlayerState {
   final Content? content;
@@ -96,6 +97,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final BookmarkRepository _bookmarkRepo;
 
   StreamSubscription<dynamic>? _playbackStateSubscription;
+  bool _hasReceivedPosition = false;
 
   PlayerViewModel({
     required StartPlaybackUseCase startPlayback,
@@ -131,6 +133,16 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   void _listenToStreams() {
     _playbackStateSubscription = _audioHandler.customState.listen((data) {
       if (data is! TtsPlaybackPosition) return;
+      final isFirstEvent = !_hasReceivedPosition;
+      _hasReceivedPosition = true;
+      unawaited(DebugLogger.instance.logEvent('tts_position_received', {
+        'origin': 'player',
+        'contentId': state.content?.id,
+        'charPosition': data.charPosition,
+        'isPlaying': data.isPlaying,
+        'ttsStatus': data.ttsStatus.name,
+        'isFirstEvent': isFirstEvent,
+      }));
       final content = state.content;
       if (content == null || content.body.isEmpty) return;
 
@@ -151,6 +163,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   }
 
   Future<void> setContent(Content content) async {
+    _hasReceivedPosition = false; // Observability: 新contentの初回受信を判定し直す
     state = state.copyWith(content: content, isLoading: true);
     try {
       final existingState = await _playbackRepo.getByContentId(content.id);

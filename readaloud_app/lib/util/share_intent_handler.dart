@@ -1,6 +1,7 @@
 import 'package:flutter_sharing_intent/flutter_sharing_intent.dart';
 import 'package:flutter_sharing_intent/model/sharing_file.dart';
 import 'dart:async';
+import 'debug_logger.dart';
 
 /// 共有されたテキストの種類。
 /// URLの判定はネイティブ側(URLUtil.isValidUrl)で行われ、
@@ -25,18 +26,29 @@ class ShareIntentHandler {
     _subscription = FlutterSharingIntent.instance
         .getMediaStream()
         .listen((List<SharedFile> files) {
+      unawaited(DebugLogger.instance.logEvent('share_received', {'source': 'stream'}));
       final payload = classify(files);
+      unawaited(DebugLogger.instance.logEvent('share_classified', {
+        'source': 'stream',
+        'kind': payload?.kind.name ?? 'none',
+      }));
       if (payload != null) onPayloadReceived(payload);
     });
   }
 
   // アプリ起動時に共有されたテキストを取得
   Future<SharedTextPayload?> getInitialSharedPayload() async {
+    await DebugLogger.instance.logEvent('share_received', {'source': 'initial'});
     final files =
         await FlutterSharingIntent.instance.getInitialSharing();
     // 取得後にリセット（再起動時に同じテキストが表示されないよう）
     FlutterSharingIntent.instance.reset();
-    return classify(files);
+    final payload = classify(files);
+    await DebugLogger.instance.logEvent('share_classified', {
+      'source': 'initial',
+      'kind': payload?.kind.name ?? 'none',
+    });
+    return payload;
   }
 
   // text/plainの共有をURL・通常テキストに分類する（テスト容易性のためstatic）

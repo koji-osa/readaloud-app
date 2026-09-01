@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/model/content.dart';
 import 'package:readaloud_app/model/quick_listen_session.dart';
+import 'package:readaloud_app/model/tts_playback_position.dart';
 import 'package:readaloud_app/repository/content_repository.dart';
 import 'package:readaloud_app/repository/settings_repository.dart';
 import 'package:readaloud_app/repository/tts/tts_service.dart';
 import 'package:readaloud_app/usecase/content/save_content_usecase.dart';
 import 'package:readaloud_app/usecase/tts/check_tts_limit_usecase.dart';
 import 'package:readaloud_app/usecase/tts/count_tts_usage_usecase.dart';
+import 'package:readaloud_app/util/debug_logger.dart';
 import 'package:readaloud_app/viewmodel/quick_listen_viewmodel.dart';
 
 void main() {
@@ -160,6 +164,85 @@ void main() {
       viewModel.start(QuickListenSession(text: '最初のテキスト'));
 
       expect(ttsService.stopCalls, 0);
+    });
+  });
+
+  group('QuickListenViewModel Observability（症状1のEvidence）', () {
+    late _FakeContentRepository contentRepo;
+    late _FakeSettingsRepository settingsRepo;
+    late _FakeTtsService ttsService;
+    late StreamController<dynamic> positionController;
+    late QuickListenViewModel viewModel;
+
+    setUp(() {
+      DebugLogger.testSink = [];
+      contentRepo = _FakeContentRepository();
+      settingsRepo = _FakeSettingsRepository();
+      ttsService = _FakeTtsService();
+      positionController = StreamController<dynamic>.broadcast();
+      final countUsage = CountTtsUsageUseCase(
+        settingsRepo: settingsRepo,
+        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+      );
+      viewModel = QuickListenViewModel(
+        ttsService: ttsService,
+        settingsRepo: settingsRepo,
+        saveContent: SaveContentUseCase(contentRepo),
+        countUsage: countUsage,
+        positionStream: positionController.stream,
+        getCurrentPosition: () => 0,
+      );
+    });
+
+    tearDown(() async {
+      DebugLogger.testSink = null;
+      await positionController.close();
+    });
+
+    test(
+        'session start → position received → play requested の順でイベントが記録される',
+        () async {
+      viewModel.start(QuickListenSession(text: '順序を検証するテキスト'));
+
+      // 直前セッション（Player等）から漏れてきた想定のpositionイベント
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 999,
+        isPlaying: false,
+        ttsStatus: TtsStatus.stopped,
+      ));
+      // ストリームのmicrotaskを消化させる
+      await Future.delayed(Duration.zero);
+
+      await viewModel.play();
+
+      final events = DebugLogger.testSink!
+          .map((line) => line.split(' ').first.replaceFirst('event=', ''))
+          .toList();
+
+      final startedIndex = events.indexOf('quick_listen_session_started');
+      final receivedIndex = events.indexOf('tts_position_received');
+      final requestedIndex = events.indexOf('tts_play_requested');
+
+      expect(startedIndex, isNonNegative);
+      expect(receivedIndex, isNonNegative);
+      expect(requestedIndex, isNonNegative);
+      expect(startedIndex, lessThan(receivedIndex));
+      expect(receivedIndex, lessThan(requestedIndex));
+    });
+
+    test('tts_position_receivedの本文断片(word等)は記録されない（DebugLoggerのforbidden key経由で保証）',
+        () async {
+      viewModel.start(QuickListenSession(text: '本文が漏れないことを確認するテキスト'));
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 5,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+      await Future.delayed(Duration.zero);
+
+      for (final line in DebugLogger.testSink!) {
+        expect(line, isNot(contains('本文が漏れないことを確認するテキスト')));
+      }
     });
   });
 }

@@ -28,6 +28,7 @@ import '../../repository/impl/playback_repository_impl.dart';
 import '../../repository/impl/bookmark_repository_impl.dart';
 import '../../repository/impl/settings_repository_impl.dart';
 import '../home/widgets/tts_usage_banner.dart';
+import '../../util/debug_logger.dart';
 
 import 'widgets/highlight_text.dart';
 import 'widgets/seek_bar.dart';
@@ -116,6 +117,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    DebugLogger.instance.logEvent('player_screen_mounted', {
+      'contentId': widget.content.id,
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         final vm = ref.read(playerViewModelProvider.notifier);
@@ -155,6 +159,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         // ViewModelのerrorMessageで表示されるため基本的には不要
       }
     });
+  }
+
+  @override
+  void dispose() {
+    DebugLogger.instance.logEvent('player_screen_disposed', {
+      'contentId': widget.content.id,
+    });
+    super.dispose();
   }
 
   Future<void> _loadAvailableVoices() async {

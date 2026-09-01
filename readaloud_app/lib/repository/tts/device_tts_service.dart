@@ -91,6 +91,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       });
 
       _tts.setErrorHandler((message) {
+        DebugLogger.instance.logEvent('error', {
+          'context': 'tts_error_handler',
+          'errorType': message.runtimeType.toString(),
+        });
         customState.add(TtsPlaybackPosition(
           charPosition: _currentPosition,
           isPlaying: false,
@@ -98,6 +102,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
         ));
       });
     } catch (e) {
+      DebugLogger.instance.logEvent('error', {
+        'context': 'tts_audio_handler_init',
+        'errorType': e.runtimeType.toString(),
+      });
       customState.add(TtsPlaybackPosition(
         charPosition: 0,
         isPlaying: false,
@@ -133,9 +141,9 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
         absolutePosition = chunkStart + startOffset;
         _currentPosition = absolutePosition;
       }
-      // FIX-021調査用ログ
+      // FIX-021調査用ログ（本文/word断片は記録しない。位置情報のみ）
       DebugLogger.instance.bufferProgress(
-        'PROGRESS: chunkIndex=$index chunkStart=$chunkStart startOffset=$startOffset absolute=$absolutePosition isResuming=$_isResuming word=$word',
+        'PROGRESS: chunkIndex=$index chunkStart=$chunkStart startOffset=$startOffset absolute=$absolutePosition isResuming=$_isResuming',
       );
       customState.add(TtsPlaybackPosition(
         charPosition: _currentPosition,
@@ -243,6 +251,13 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _chunks = _splitText(text, startPosition);
     _currentChunkIndex = 0;
 
+    // Observability: 実際にエンジンへ渡された開始位置を記録（本文は含めない）
+    await DebugLogger.instance.logEvent('tts_play_started', {
+      'requestedStartPosition': startPosition,
+      'chunkCount': _chunks.length,
+      'firstChunkStartPosition': _chunks.isNotEmpty ? _chunks.first.startPosition : -1,
+    });
+
     if (_chunks.isEmpty) return;
 
     // 通知領域にメディア情報を設定
@@ -310,6 +325,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _pausedPosition = _currentPosition; // 一時停止位置を保存（FIX-021）
     // FIX-021調査用ログ
     await DebugLogger.instance.onPause(_currentPosition, _currentChunkIndex);
+    await DebugLogger.instance.logEvent('tts_pause', {
+      'currentPosition': _currentPosition,
+      'chunkIndex': _currentChunkIndex,
+    });
     await _tts.pause();
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,
@@ -332,6 +351,9 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _isResuming = false; // FIX-021
     _pausedPosition = 0; // FIX-021
     _chunks = [];
+    await DebugLogger.instance.logEvent('tts_stop', {
+      'lastPosition': _lastStoppedPosition,
+    });
     await _tts.stop();
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,

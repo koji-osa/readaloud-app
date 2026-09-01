@@ -12,6 +12,7 @@ import '../settings/settings_screen.dart';
 import '../player/player_screen.dart';
 import 'widgets/content_card.dart';
 import 'widgets/tts_usage_banner.dart';
+import '../../util/debug_logger.dart';
 
 final contentListViewModelProvider =
     StateNotifierProvider<ContentListViewModel, ContentListState>((ref) {
@@ -284,6 +285,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _openPlayer(BuildContext context, WidgetRef ref, Content content) async {
+    await DebugLogger.instance.logEvent('navigation_push_requested', {
+      'target': 'player',
+      'stackSource': 'content_card',
+      'contentId': content.id,
+    });
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => PlayerScreen(content: content)),
     );

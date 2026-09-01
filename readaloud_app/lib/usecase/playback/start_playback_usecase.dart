@@ -6,6 +6,7 @@ import '../../repository/tts/tts_service.dart';
 import '../../repository/tts/device_tts_service.dart';
 import '../../model/playback_state.dart';
 import '../tts/count_tts_usage_usecase.dart';
+import '../../util/debug_logger.dart';
 
 class StartPlaybackUseCase {
   final ContentRepository _contentRepo;
@@ -55,6 +56,13 @@ class StartPlaybackUseCase {
       totalChars: content.charCount,
       startPosition: state.position,
     );
+
+    // Observability: play()相当の直前状態を記録（本文は含めない）
+    await DebugLogger.instance.logEvent('tts_play_requested', {
+      'origin': 'player',
+      'contentId': contentId,
+      'startPositionPassedToSpeak': state.position,
+    });
 
     // 読み上げ開始
     await _ttsService.speak(

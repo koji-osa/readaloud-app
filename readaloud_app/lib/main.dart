@@ -108,17 +108,36 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
     // 通常Content再生・Quick Listen再生のいずれかが裏で継続していると、
     // 単一のTtsAudioHandlerを取り合って状態汚染やTTS使用量の二重カウントに
     // つながるため、新しい共有を処理する前に両方とも明示的に停止しておく。
+    await DebugLogger.instance.logEvent('player_stop_requested');
     await ref.read(playerViewModelProvider.notifier).stop();
+    await DebugLogger.instance.logEvent('player_stop_completed');
+
+    await DebugLogger.instance.logEvent('quick_listen_close_requested');
     await ref.read(quickListenViewModelProvider.notifier).close();
-    if (!mounted) return;
+    await DebugLogger.instance.logEvent('quick_listen_close_completed');
+
+    if (!mounted) {
+      await DebugLogger.instance.logEvent('error', {
+        'context': 'handle_shared_payload_not_mounted',
+      });
+      return;
+    }
 
     if (payload.kind == SharedContentKind.url) {
+      await DebugLogger.instance.logEvent('navigation_push_requested', {
+        'target': 'add_screen',
+        'stackSource': 'share_handler',
+      });
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => AddScreen(initialUrl: value),
         ),
       );
     } else {
+      await DebugLogger.instance.logEvent('navigation_push_requested', {
+        'target': 'quick_listen',
+        'stackSource': 'share_handler',
+      });
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => QuickListenScreen(initialText: value),
