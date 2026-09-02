@@ -262,6 +262,12 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
 
     if (_chunks.isEmpty) return;
 
+    // 前回の再生(別セッション/別コンテンツ)の_currentPositionが残っていると、
+    // 実際に_playChunk()がチャンク先頭位置へ補正するより前に、この直後の
+    // customState.addが古い位置をisPlaying:trueとして発信してしまう
+    // （Quick Listen症状1調査で判明）。_playChunk()と同じ基準へ先に合わせておく。
+    _currentPosition = _chunks.first.startPosition;
+
     // 通知領域にメディア情報を設定
     mediaItem.add(const MediaItem(
       id: 'tts_playback',

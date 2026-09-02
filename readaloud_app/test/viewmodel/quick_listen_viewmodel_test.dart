@@ -404,6 +404,83 @@ void main() {
       expect(viewModel.state.highlightPosition, 34);
     });
 
+    test(
+        '競合ケース: play()後に旧Player由来のstale isPlaying:trueイベント'
+        '(sessionId無しのためcharPosition=601)が先着し、その直後に現Quick Listen'
+        '自身のcharPosition=0/playingイベントが届く場合でも、最終的にstateは'
+        'stale 601へ不正に確定せず、speak()にはstartPosition:0が渡ったままである',
+        () async {
+      // audioHandler.customStateにはQuick Listen sessionIdが乗らないため、
+      // 現在のゲート(_hasCalledPlayForCurrentSession && isPlaying)は
+      // 「play()後に届いた最初のisPlaying:trueイベント」を無条件に
+      // "このセッション自身の再生開始"とみなしてしまう。もし旧Playerの
+      // isPlaying:trueイベント(charPosition=601)がこの意味で「最初の
+      // isPlaying:trueイベント」としてplay()直後に紛れ込んだ場合、
+      // ゲートはそのstale 601で開いてしまう。この場合でも、後続の
+      // 「現Quick Listen自身のcharPosition=0/playing」イベントが正しく
+      // 反映されて最終的な表示・状態が0へ復旧することを確認する
+      // （=旧Playerのpositionへ不正確定したまま留まる回帰がないことの証明）。
+      viewModel.start(QuickListenSession(text: '競合ケースを検証するテキスト'));
+
+      // 旧Player position=601 → 新Quick Listen session start
+      expect(viewModel.state.highlightPosition, 0);
+
+      // stale 601/stopped (start()直後、play()より前に届く旧イベント)
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 601,
+        isPlaying: false,
+        ttsStatus: TtsStatus.stopped,
+      ));
+      await Future.delayed(Duration.zero);
+      expect(viewModel.state.highlightPosition, 0,
+          reason: 'play()前なので無条件に無視される');
+
+      // play() （snapshotされるstartPositionはこの時点の0）
+      await viewModel.play();
+      expect(ttsService.speakStartPositions, hasLength(1));
+      expect(ttsService.speakStartPositions.single, 0,
+          reason: 'speak(startPosition:0)は必ず維持される');
+
+      // stale 601/playing が到着（sessionIdが無いため「このセッションの再生開始」
+      // と区別できず、現在のゲート設計ではここで開いてしまう）
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 601,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+      await Future.delayed(Duration.zero);
+      // 現在のゲート設計の既知の弱点: sessionIdが無いためこの時点では
+      // 一時的に601が反映されてしまう(ゲートがここで開く)。
+      // ただし後続の正しいイベントで必ず上書きされるため「確定」はしない
+      // ことを以降で検証する。
+      expect(viewModel.state.highlightPosition, 601,
+          reason: '既知の弱点: sessionId不在のためstale isPlaying:trueで一時的に'
+              '601へ反映されてしまう（次の正しいイベントで直ちに上書きされる）');
+
+      // 現Quick Listen自身のposition=0/playing が到着
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 0,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+      await Future.delayed(Duration.zero);
+
+      expect(viewModel.state.highlightPosition, 0,
+          reason: 'stale 601へ不正に確定せず、正しいセッション自身の位置(0)へ復旧する');
+      expect(viewModel.state.isPlaying, isTrue);
+
+      // pause()はstate.highlightPositionではなくgetCurrentPosition()（実機では
+      // audioHandler.currentPositionそのもの）を使うため、上記の一時的な601とは
+      // 独立しており、pause/resumeが601へ不正確定することはない。
+      final position = await () async {
+        await viewModel.pause();
+        return viewModel.state.highlightPosition;
+      }();
+      expect(position, 0,
+          reason: 'pause()はgetCurrentPosition()由来の値を使うため601に汚染されない'
+              '（本テストのFakeはgetCurrentPosition: () => 0固定）');
+    });
+
     test('_handleSharedPayload()相当: セッション未設定のままpositionイベントが届いても'
         'stateへ反映されない（play()を一度も呼んでいないため）', () async {
       // start()すら呼ばれていない（session未設定）状態で、
