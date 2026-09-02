@@ -12,7 +12,12 @@ class SharedTextPayload {
   final SharedContentKind kind;
   final String value;
 
-  const SharedTextPayload(this.kind, this.value);
+  // initial/stream経路をまたいで1本のshare flowを追跡するための相関ID。
+  // ShareIntentHandlerが払い出したflowIdをそのまま保持し、
+  // _handleSharedPayload()以降のObservabilityログにも伝播させる。
+  final String flowId;
+
+  const SharedTextPayload(this.kind, this.value, {this.flowId = ''});
 }
 
 class ShareIntentHandler {
@@ -36,7 +41,7 @@ class ShareIntentHandler {
       final flowId = _nextFlowId('stream');
       unawaited(DebugLogger.instance.logEvent(
           'share_received', {'source': 'stream', 'flowId': flowId}));
-      final payload = classify(files);
+      final payload = classify(files, flowId: flowId);
       unawaited(DebugLogger.instance.logEvent('share_classified', {
         'source': 'stream',
         'kind': payload?.kind.name ?? 'none',
@@ -55,7 +60,7 @@ class ShareIntentHandler {
         await FlutterSharingIntent.instance.getInitialSharing();
     // 取得後にリセット（再起動時に同じテキストが表示されないよう）
     FlutterSharingIntent.instance.reset();
-    final payload = classify(files);
+    final payload = classify(files, flowId: flowId);
     await DebugLogger.instance.logEvent('share_classified', {
       'source': 'initial',
       'kind': payload?.kind.name ?? 'none',
@@ -64,16 +69,17 @@ class ShareIntentHandler {
     return payload;
   }
 
-  // text/plainの共有をURL・通常テキストに分類する（テスト容易性のためstatic）
-  static SharedTextPayload? classify(List<SharedFile> files) {
+  // text/plainの共有をURL・通常テキストに分類する（テスト容易性のためstatic）。
+  // flowIdは相関ID伝播用の付加情報で、分類結果そのものには影響しない。
+  static SharedTextPayload? classify(List<SharedFile> files, {String flowId = ''}) {
     for (final file in files) {
       final value = file.value;
       if (value == null || value.trim().isEmpty) continue;
       if (file.type == SharedMediaType.URL) {
-        return SharedTextPayload(SharedContentKind.url, value);
+        return SharedTextPayload(SharedContentKind.url, value, flowId: flowId);
       }
       if (file.type == SharedMediaType.TEXT) {
-        return SharedTextPayload(SharedContentKind.text, value);
+        return SharedTextPayload(SharedContentKind.text, value, flowId: flowId);
       }
     }
     return null;

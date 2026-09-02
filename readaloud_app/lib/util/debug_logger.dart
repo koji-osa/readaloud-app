@@ -131,6 +131,10 @@ class DebugLogger {
   Future<String?> copyToDownloads() async {
     if (!_isInitialized || _logFile == null) return null;
     try {
+      // 直前のunawaited(logEvent(...))による書き込みがまだ_writeQueueに
+      // 積まれている状態でコピーすると、直近のイベントがexportから欠落する
+      // ため、コピー開始前に現在キューされている書き込みの完了を待つ。
+      await _writeQueue;
       // Android Download ディレクトリ
       const downloadPath = '/storage/emulated/0/Download';
       final downloadDir = Directory(downloadPath);

@@ -89,5 +89,22 @@ void main() {
 
       expect(payload!.value, '  https://example.com/article  ');
     });
+
+    test('flowIdを渡すとSharedTextPayloadにそのまま伝播する（share flowの相関ID）', () {
+      final payload = ShareIntentHandler.classify(
+        [_file(value: '共有テキスト', type: SharedMediaType.TEXT)],
+        flowId: 'stream-1',
+      );
+
+      expect(payload!.flowId, 'stream-1');
+    });
+
+    test('flowId未指定時は空文字（既存呼び出し・テストとの後方互換）', () {
+      final payload = ShareIntentHandler.classify([
+        _file(value: '共有テキスト', type: SharedMediaType.TEXT),
+      ]);
+
+      expect(payload!.flowId, '');
+    });
   });
 }

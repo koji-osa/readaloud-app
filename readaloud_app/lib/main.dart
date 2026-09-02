@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -104,40 +106,54 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
     if (!mounted) return;
     final value = payload.value.trim();
     if (value.isEmpty) return;
+    // share_received/share_classifiedと同じflowIdをここから先のログにも
+    // 付与し、initial/stream経路が重なっても1本のshare flowとして
+    // 追跡できるようにする。
+    final flowId = payload.flowId;
 
     // 通常Content再生・Quick Listen再生のいずれかが裏で継続していると、
     // 単一のTtsAudioHandlerを取り合って状態汚染やTTS使用量の二重カウントに
     // つながるため、新しい共有を処理する前に両方とも明示的に停止しておく。
-    await DebugLogger.instance.logEvent('player_stop_requested');
+    // ログ自体は純粋なObservabilityで、DebugLoggerのseq採番＋write queueが
+    // 呼び出し順を保証するため、ファイルI/O完了はawaitせず共有→Navigationの
+    // タイミングに影響させない。stop()/close()本体は従来通りawaitする。
+    unawaited(DebugLogger.instance
+        .logEvent('player_stop_requested', {'flowId': flowId}));
     await ref.read(playerViewModelProvider.notifier).stop();
-    await DebugLogger.instance.logEvent('player_stop_completed');
+    unawaited(DebugLogger.instance
+        .logEvent('player_stop_completed', {'flowId': flowId}));
 
-    await DebugLogger.instance.logEvent('quick_listen_close_requested');
+    unawaited(DebugLogger.instance
+        .logEvent('quick_listen_close_requested', {'flowId': flowId}));
     await ref.read(quickListenViewModelProvider.notifier).close();
-    await DebugLogger.instance.logEvent('quick_listen_close_completed');
+    unawaited(DebugLogger.instance
+        .logEvent('quick_listen_close_completed', {'flowId': flowId}));
 
     if (!mounted) {
-      await DebugLogger.instance.logEvent('error', {
+      unawaited(DebugLogger.instance.logEvent('error', {
         'context': 'handle_shared_payload_not_mounted',
-      });
+        'flowId': flowId,
+      }));
       return;
     }
 
     if (payload.kind == SharedContentKind.url) {
-      await DebugLogger.instance.logEvent('navigation_push_requested', {
+      unawaited(DebugLogger.instance.logEvent('navigation_push_requested', {
         'target': 'add_screen',
         'stackSource': 'share_handler',
-      });
+        'flowId': flowId,
+      }));
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => AddScreen(initialUrl: value),
         ),
       );
     } else {
-      await DebugLogger.instance.logEvent('navigation_push_requested', {
+      unawaited(DebugLogger.instance.logEvent('navigation_push_requested', {
         'target': 'quick_listen',
         'stackSource': 'share_handler',
-      });
+        'flowId': flowId,
+      }));
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => QuickListenScreen(initialText: value),

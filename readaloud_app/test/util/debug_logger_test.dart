@@ -239,5 +239,26 @@ void main() {
           .toList();
       expect(orderedIs, List.generate(total, (i) => i));
     });
+
+    test(
+        'copyToDownloads()は直前のunawaited(logEvent(...))の書き込み完了を待ってから'
+        'コピー先を確認する（実機のDownloadディレクトリが存在しないテスト環境でも、'
+        '元のログファイルには書き込みが反映されている）', () async {
+      unawaited(DebugLogger.instance.logEvent('late_event_1'));
+      unawaited(DebugLogger.instance.logEvent('late_event_2'));
+
+      // 実行環境によって/storage/emulated/0/Downloadの有無は変わりうるため
+      // 戻り値そのものは検証しないが、copyToDownloads()が返る時点で
+      // _writeQueueへ積まれた書き込みは完了しているべき。
+      await DebugLogger.instance.copyToDownloads();
+
+      final logFile = tempDir
+          .listSync()
+          .whereType<File>()
+          .firstWhere((f) => f.path.contains('readaloud_fix021_'));
+      final content = await logFile.readAsString();
+      expect(content, contains('event=late_event_1'));
+      expect(content, contains('event=late_event_2'));
+    });
   });
 }
