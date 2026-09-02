@@ -71,6 +71,24 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
   // 即座に再送される可能性を切り分けるためのフラグ（症状1のEvidence）。
   bool _hasReceivedPosition = false;
 
+  // 症状1の修正: audioHandler.customState(positionStream)はBehaviorSubject
+  // 相当で、購読直後に「前回最後の値」を再送する。さらにstart()内でのstop()も
+  // 旧セッション最後のcharPositionを伴うcustomStateを再送しうる。
+  // これらは新セッション自身の再生開始と無関係な値のため、以下の2フラグで
+  // 「このセッション自身のplay()が実際に再生を開始したと確認できるまで」
+  // state.highlightPositionへの反映を止める。
+  //
+  // _hasCalledPlayForCurrentSession: このセッションでplay()を呼んだか。
+  //   play()より前に届くイベントは無条件で無視する（要件: 初回play開始前の
+  //   旧Player/旧セッション由来イベントを適用しない）。
+  // _acceptPositionUpdates: play()呼び出し後、実際に「このセッションの再生が
+  //   始まった」と確認できるisPlaying==trueイベントを受信して初めてtrueになる。
+  //   これによりplay()直後に紛れ込む旧stopped/pausedイベント（例: stop()自体が
+  //   発生させるcustomState再送）もstateを汚染しない。一度trueになった後は
+  //   同一セッション内のpause/resumeも含め通常どおり反映する。
+  bool _hasCalledPlayForCurrentSession = false;
+  bool _acceptPositionUpdates = false;
+
   QuickListenViewModel({
     required TtsService ttsService,
     required SettingsRepository settingsRepo,
@@ -88,6 +106,17 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
       if (data is! TtsPlaybackPosition) return;
       final isFirstEvent = !_hasReceivedPosition;
       _hasReceivedPosition = true;
+
+      // play()が未呼び出しのイベントは常に無視。play()呼び出し後も、この
+      // セッション自身の再生開始を示すisPlaying==trueイベントを受信するまでは
+      // 無視し、それを受信した時点で以降のイベントを通常どおり反映する。
+      if (!_acceptPositionUpdates &&
+          _hasCalledPlayForCurrentSession &&
+          data.isPlaying) {
+        _acceptPositionUpdates = true;
+      }
+      final appliedToState = _acceptPositionUpdates;
+
       unawaited(DebugLogger.instance.logEvent('tts_position_received', {
         'origin': 'quick_listen',
         'sessionId': state.session?.id,
@@ -95,7 +124,10 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
         'isPlaying': data.isPlaying,
         'ttsStatus': data.ttsStatus.name,
         'isFirstEvent': isFirstEvent,
+        'appliedToState': appliedToState,
       }));
+
+      if (!appliedToState) return;
       state = state.copyWith(
         highlightPosition: data.charPosition,
         isPlaying: data.isPlaying,
@@ -124,6 +156,8 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
     // （古いFutureの完了結果は_performSave側のセッションIDガードで無視される）
     _pendingSave = null;
     _hasReceivedPosition = false; // Observability: 新セッションの初回受信を判定し直す
+    _hasCalledPlayForCurrentSession = false;
+    _acceptPositionUpdates = false;
     state = QuickListenState(session: session);
     unawaited(DebugLogger.instance.logEvent('quick_listen_session_started', {
       'sessionId': session.id,
@@ -159,6 +193,10 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
         'highlightPositionAtPlayCall': startPosition,
         'startPositionPassedToSpeak': startPosition,
       });
+      // speak()呼び出し直前にゲートを開ける。これ以降に届くpositionStream
+      // イベントのうち、実際にisPlaying==trueとなる最初のイベント（=この
+      // セッション自身の再生開始）以降だけがstateへ反映されるようになる。
+      _hasCalledPlayForCurrentSession = true;
       await _ttsService.speak(
         text: session.text,
         startPosition: startPosition,

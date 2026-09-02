@@ -247,8 +247,10 @@ void main() {
 
     test(
         'play()がDebugLogger.logEvent()のawaitで止まっている間にpositionStreamの'
-        '更新でstateが変化しても、記録値と実際にspeak()へ渡されたstartPositionは一致する'
-        '（食い違いのregression防止）', () async {
+        '更新が届いても、まだこのセッション自身の再生開始が確認できていないため'
+        'stateへは反映されず、記録値と実際にspeak()へ渡されたstartPositionも'
+        '一致する（食い違いのregression防止。症状1修正後はゲートにより'
+        'そもそもstateが汚染されなくなったことも合わせて確認する）', () async {
       final logGate = Completer<void>();
       DebugLogger.testAwaitHook = () => logGate.future;
       addTearDown(() => DebugLogger.testAwaitHook = null);
@@ -260,16 +262,19 @@ void main() {
       // 止まるまでマイクロタスクを進める。
       await Future.delayed(Duration.zero);
 
-      // ログ書き込み待ちの間に、positionStream経由でhighlightPositionが
-      // 変化する（症状1調査で見つかった競合パターンを再現）。
+      // ログ書き込み待ちの間に、positionStream経由で（症状1調査で見つかった
+      // 競合パターンを再現するため）isPlaying:trueのイベントが届く。
+      // このセッション自身はまだspeak()を呼び出していない（play()内部の
+      // ゲートがまだ開いていない）ため、症状1修正後はstateへ反映されない。
       positionController.add(const TtsPlaybackPosition(
         charPosition: 777,
         isPlaying: true,
         ttsStatus: TtsStatus.playing,
       ));
       await Future.delayed(Duration.zero);
-      expect(viewModel.state.highlightPosition, 777,
-          reason: 'レースを起こすための前提: ログ待ち中にstateが変化していること');
+      expect(viewModel.state.highlightPosition, 0,
+          reason: '症状1修正: play()自身がspeak()を呼ぶ前に届いたイベントは'
+              'ゲートにより無視され、stateを汚染しない');
 
       logGate.complete();
       await playFuture;
@@ -284,6 +289,134 @@ void main() {
           .firstWhere((l) => l.contains('event=tts_play_requested'));
       expect(requestedLine, contains('startPositionPassedToSpeak=$actualStartPosition'));
       expect(requestedLine, contains('highlightPositionAtPlayCall=$actualStartPosition'));
+
+      final receivedLine = DebugLogger.testSink!
+          .firstWhere((l) => l.contains('event=tts_position_received'));
+      expect(receivedLine, contains('appliedToState=false'));
+    });
+  });
+
+  group('QuickListenViewModel 症状1: 旧Player/旧セッションのstale position', () {
+    late _FakeContentRepository contentRepo;
+    late _FakeSettingsRepository settingsRepo;
+    late _FakeTtsService ttsService;
+    late StreamController<dynamic> positionController;
+    late QuickListenViewModel viewModel;
+
+    setUp(() {
+      DebugLogger.testSink = [];
+      contentRepo = _FakeContentRepository();
+      settingsRepo = _FakeSettingsRepository();
+      ttsService = _FakeTtsService();
+      positionController = StreamController<dynamic>.broadcast();
+      final countUsage = CountTtsUsageUseCase(
+        settingsRepo: settingsRepo,
+        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+      );
+      viewModel = QuickListenViewModel(
+        ttsService: ttsService,
+        settingsRepo: settingsRepo,
+        saveContent: SaveContentUseCase(contentRepo),
+        countUsage: countUsage,
+        positionStream: positionController.stream,
+        getCurrentPosition: () => 0,
+      );
+    });
+
+    tearDown(() async {
+      DebugLogger.testSink = null;
+      await positionController.close();
+    });
+
+    test(
+        '実機ログ再現: 旧Player position=601 → 新Quick Listen session start → '
+        'stale position=601(stopped)が届く → play()はstartPosition:0でspeak()する',
+        () async {
+      // 直前の通常Playerがcharacter position=601でpauseしていた状態を模し、
+      // 新しいQuick Listen sessionをstartする前に共有positionStream
+      // (audioHandler.customState相当)へ601/stoppedが流れてくる状況を再現する。
+      viewModel.start(QuickListenSession(text: '新しく共有されたテキスト'));
+      expect(viewModel.state.highlightPosition, 0,
+          reason: '新セッション開始直後はposition=0を維持する');
+
+      // 新session start直後、このセッション自身はまだplay()していないのに
+      // 旧Player/旧セッション由来と思われるstale eventが届く。
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 601,
+        isPlaying: false,
+        ttsStatus: TtsStatus.stopped,
+      ));
+      await Future.delayed(Duration.zero);
+
+      expect(viewModel.state.highlightPosition, 0,
+          reason: '症状1修正: play()前に届いたstale positionはstateへ適用されない');
+      final staleLine = DebugLogger.testSink!
+          .firstWhere((l) => l.contains('charPosition=601'));
+      expect(staleLine, contains('appliedToState=false'),
+          reason: 'Evidence取得のためログ自体は残しつつ、適用有無を記録する');
+
+      await viewModel.play();
+
+      expect(ttsService.speakStartPositions, hasLength(1));
+      expect(ttsService.speakStartPositions.single, 0,
+          reason: '実機不具合の再現防止: speak()にstartPosition:601が渡ってはいけない');
+      expect(viewModel.state.highlightPosition, 0);
+    });
+
+    test('play()直後に旧stopped/pausedイベントが届いてもstateを汚染しない', () async {
+      viewModel.start(QuickListenSession(text: '再生直後の汚染を検証するテキスト'));
+
+      await viewModel.play();
+      expect(ttsService.speakStartPositions.single, 0);
+
+      // play()呼び出し直後、このセッション自身の再生開始を示すisPlaying:true
+      // イベントがまだ届く前に、旧セッション由来と思われるstopped/pausedが
+      // 紛れ込んだ場合を再現する。
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 601,
+        isPlaying: false,
+        ttsStatus: TtsStatus.stopped,
+      ));
+      await Future.delayed(Duration.zero);
+
+      expect(viewModel.state.highlightPosition, 0,
+          reason: 'play()直後の旧stopped/pausedイベントでstateが汚染されない');
+
+      // このセッション自身の再生開始を示す最初のisPlaying:trueイベントが届く。
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 12,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+      await Future.delayed(Duration.zero);
+
+      expect(viewModel.state.highlightPosition, 12,
+          reason: 'current-session playingイベント以降は通常どおり反映される');
+
+      // 以降のpositionStream更新も通常どおり反映され続けることを確認する。
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 34,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+      await Future.delayed(Duration.zero);
+
+      expect(viewModel.state.highlightPosition, 34);
+    });
+
+    test('_handleSharedPayload()相当: セッション未設定のままpositionイベントが届いても'
+        'stateへ反映されない（play()を一度も呼んでいないため）', () async {
+      // start()すら呼ばれていない（session未設定）状態で、
+      // audioHandler.customState購読直後にstale eventが再送されるケースを再現。
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 601,
+        isPlaying: false,
+        ttsStatus: TtsStatus.stopped,
+      ));
+      await Future.delayed(Duration.zero);
+
+      expect(viewModel.state.session, isNull);
+      expect(viewModel.state.highlightPosition, 0);
     });
   });
 }
