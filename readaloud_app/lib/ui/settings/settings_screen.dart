@@ -293,7 +293,7 @@ class SettingsScreen extends ConsumerWidget {
                   const _Divider(),
                   _SettingRow(
                     icon: Icons.bug_report,
-                    label: 'FIX-021ログをダウンロード',
+                    label: '診断ログをダウンロード',
                     value: '',
                     onTap: () => _downloadDebugLog(context),
                   ),

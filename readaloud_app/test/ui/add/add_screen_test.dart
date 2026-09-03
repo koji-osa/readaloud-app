@@ -110,4 +110,61 @@ void main() {
 
     expect(find.textContaining('選択したノートを取り込む (1件)'), findsOneWidget);
   });
+
+  // Quick Listen導入に伴うTabController(initialIndex)変更の回帰ロック。
+  // 通常のAddScreen()呼び出し(ホーム画面の+ボタン等)では従来どおりテキストタブが
+  // 初期表示されることを保証する。
+  testWidgets('initialUrlを指定しない場合は従来どおりテキストタブが初期表示される', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          obsidianImportViewModelProvider.overrideWith(
+            (ref) => ObsidianImportViewModel(
+              repository: _FakeObsidianRepository(const []),
+              importer: ObsidianImporter(_FakeObsidianRepository(const [])),
+              importContent:
+                  ImportContentUseCase(SaveContentUseCase(_FakeContentRepository())),
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: AddScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('ここにテキストを入力または貼り付け...'), findsOneWidget);
+  });
+
+  // URL共有 → 既存Web import経路の回帰ロック。initialUrlが渡された場合は
+  // URLタブが初期表示され、URLが事前入力されることを保証する。
+  testWidgets('initialUrlを指定するとURLタブが初期表示され、URLが事前入力される(共有経由のWeb import導線)',
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          obsidianImportViewModelProvider.overrideWith(
+            (ref) => ObsidianImportViewModel(
+              repository: _FakeObsidianRepository(const []),
+              importer: ObsidianImporter(_FakeObsidianRepository(const [])),
+              importContent:
+                  ImportContentUseCase(SaveContentUseCase(_FakeContentRepository())),
+            ),
+          ),
+        ],
+        child: const MaterialApp(
+          home: AddScreen(initialUrl: 'https://example.com/article'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // find.text()は環境によって内部描画用の重複Textも拾うことがあるため、
+    // TextFieldの実際のcontroller値を直接検証する。
+    final urlField = find.byWidgetPredicate(
+      (widget) => widget is EditableText &&
+          widget.controller.text == 'https://example.com/article',
+    );
+    expect(urlField, findsOneWidget);
+    expect(find.text('URLを入力するとWebページの本文を自動で抽出します'), findsOneWidget);
+  });
 }

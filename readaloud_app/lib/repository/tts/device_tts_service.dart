@@ -91,6 +91,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
       });
 
       _tts.setErrorHandler((message) {
+        DebugLogger.instance.logEvent('error', {
+          'context': 'tts_error_handler',
+          'errorType': message.runtimeType.toString(),
+        });
         customState.add(TtsPlaybackPosition(
           charPosition: _currentPosition,
           isPlaying: false,
@@ -98,6 +102,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
         ));
       });
     } catch (e) {
+      DebugLogger.instance.logEvent('error', {
+        'context': 'tts_audio_handler_init',
+        'errorType': e.runtimeType.toString(),
+      });
       customState.add(TtsPlaybackPosition(
         charPosition: 0,
         isPlaying: false,
@@ -133,9 +141,9 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
         absolutePosition = chunkStart + startOffset;
         _currentPosition = absolutePosition;
       }
-      // FIX-021調査用ログ
+      // FIX-021調査用ログ（本文/word断片は記録しない。位置情報のみ）
       DebugLogger.instance.bufferProgress(
-        'PROGRESS: chunkIndex=$index chunkStart=$chunkStart startOffset=$startOffset absolute=$absolutePosition isResuming=$_isResuming word=$word',
+        'PROGRESS: chunkIndex=$index chunkStart=$chunkStart startOffset=$startOffset absolute=$absolutePosition isResuming=$_isResuming',
       );
       customState.add(TtsPlaybackPosition(
         charPosition: _currentPosition,
@@ -243,7 +251,22 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _chunks = _splitText(text, startPosition);
     _currentChunkIndex = 0;
 
+    // Observability: 実際にエンジンへ渡された開始位置を記録（本文は含めない）。
+    // この時点ではまだ_playChunk()/_tts.speak()を呼んでおらず実際の発話は
+    // 開始していないため、誤解を避けるためイベント名は"prepared"とする。
+    await DebugLogger.instance.logEvent('tts_play_prepared', {
+      'requestedStartPosition': startPosition,
+      'chunkCount': _chunks.length,
+      'firstChunkStartPosition': _chunks.isNotEmpty ? _chunks.first.startPosition : -1,
+    });
+
     if (_chunks.isEmpty) return;
+
+    // 前回の再生(別セッション/別コンテンツ)の_currentPositionが残っていると、
+    // 実際に_playChunk()がチャンク先頭位置へ補正するより前に、この直後の
+    // customState.addが古い位置をisPlaying:trueとして発信してしまう
+    // （Quick Listen症状1調査で判明）。_playChunk()と同じ基準へ先に合わせておく。
+    _currentPosition = _chunks.first.startPosition;
 
     // 通知領域にメディア情報を設定
     mediaItem.add(const MediaItem(
@@ -310,6 +333,10 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _pausedPosition = _currentPosition; // 一時停止位置を保存（FIX-021）
     // FIX-021調査用ログ
     await DebugLogger.instance.onPause(_currentPosition, _currentChunkIndex);
+    await DebugLogger.instance.logEvent('tts_pause', {
+      'currentPosition': _currentPosition,
+      'chunkIndex': _currentChunkIndex,
+    });
     await _tts.pause();
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,
@@ -332,6 +359,9 @@ class TtsAudioHandler extends BaseAudioHandler implements TtsService {
     _isResuming = false; // FIX-021
     _pausedPosition = 0; // FIX-021
     _chunks = [];
+    await DebugLogger.instance.logEvent('tts_stop', {
+      'lastPosition': _lastStoppedPosition,
+    });
     await _tts.stop();
     customState.add(TtsPlaybackPosition(
       charPosition: _currentPosition,
