@@ -7,7 +7,7 @@ import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/home/home_screen.dart';
 import 'ui/add/add_screen.dart';
 import 'ui/player/player_screen.dart';
-import 'ui/quick_listen/quick_listen_screen.dart';
+import 'ui/quick_listen/quick_listen_screen.dart' show quickListenViewModelProvider;
 import 'repository/settings_repository.dart';
 import 'repository/impl/settings_repository_impl.dart';
 import 'repository/tts/device_tts_service.dart';
@@ -15,6 +15,7 @@ import 'providers.dart';
 import 'model/setting.dart';
 import 'util/share_intent_handler.dart';
 import 'util/debug_logger.dart';
+import 'util/quick_listen_route_tracker.dart';
 
 
 void main() async {
@@ -80,6 +81,8 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
   bool _isLoading = true;
   bool _onboardingCompleted = false;
   late ShareIntentHandler _shareIntentHandler;
+  final QuickListenRouteTracker _quickListenRouteTracker =
+      QuickListenRouteTracker();
 
   @override
   void initState() {
@@ -137,6 +140,15 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
       return;
     }
 
+    // 直前のQuickListen routeがNavigator stack上に残っていれば、
+    // ここで対象routeだけを除去する。URL共有でAddScreenへ分岐する場合も
+    // 同じroute accumulation根因が起こりうるため、payload種別を判定する
+    // 前に必ず呼ぶ（詳細はQuickListenRouteTrackerのdocコメント参照）。
+    _quickListenRouteTracker.removeActiveQuickListen(
+      context: context,
+      flowId: flowId,
+    );
+
     if (payload.kind == SharedContentKind.url) {
       unawaited(DebugLogger.instance.logEvent('navigation_push_requested', {
         'target': 'add_screen',
@@ -149,15 +161,10 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
         ),
       );
     } else {
-      unawaited(DebugLogger.instance.logEvent('navigation_push_requested', {
-        'target': 'quick_listen',
-        'stackSource': 'share_handler',
-        'flowId': flowId,
-      }));
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => QuickListenScreen(initialText: value),
-        ),
+      _quickListenRouteTracker.openQuickListen(
+        context: context,
+        text: value,
+        flowId: flowId,
       );
     }
   }
