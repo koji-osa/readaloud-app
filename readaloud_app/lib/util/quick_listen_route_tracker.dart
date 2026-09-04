@@ -86,5 +86,18 @@ class QuickListenRouteTracker {
         _activeRoute = null;
       }
     }));
+
+    // No.94 Observability: push直後ではなく最初のframe描画後に1回だけ、
+    // このrouteが実際にNavigator stack上でcurrent/activeかどうかを記録する。
+    // trueの場合だけでなくfalseの場合も必ず記録することで、cold-startで
+    // route再露出が発生した場合の切り分け材料にする。既存のpush/pop
+    // ロジック自体には一切影響しない（読み取り専用の観測のみ）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(DebugLogger.instance.logEvent('quick_listen_route_visibility', {
+        'flowId': flowId,
+        'isCurrent': route.isCurrent,
+        'isActive': route.isActive,
+      }));
+    });
   }
 }

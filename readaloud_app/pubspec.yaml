@@ -30,6 +30,8 @@ dependencies:
   uuid: ^4.4.0
   # ネットワーク確認
   connectivity_plus: ^6.0.3
+  # No.94 Observability: privacy-safeなSHA-256 fingerprint計算用
+  crypto: ^3.0.3
   # PDF変換
   # Obsidian Vault等、SAF経由のディレクトリ取り込み
   docman: ^1.2.0
