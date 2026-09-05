@@ -15,6 +15,7 @@ import 'repository/tts/device_tts_service.dart';
 import 'providers.dart';
 import 'model/setting.dart';
 import 'util/share_intent_handler.dart';
+import 'util/process_text_handler.dart';
 import 'util/debug_logger.dart';
 import 'util/quick_listen_route_tracker.dart';
 import 'util/share_fingerprint.dart';
@@ -102,6 +103,7 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
   bool _isLoading = true;
   bool _onboardingCompleted = false;
   late ShareIntentHandler _shareIntentHandler;
+  late ProcessTextHandler _processTextHandler;
   final QuickListenRouteTracker _quickListenRouteTracker =
       QuickListenRouteTracker();
 
@@ -117,9 +119,34 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
       onPayloadReceived: _handleSharedPayload,
     );
     _shareIntentHandler.startListening();
+    // 選択テキスト→ReadAloud MVP: ACTION_PROCESS_TEXT経路。既存の
+    // _handleSharedPayload()をそのまま再利用する（Quick Listen機構の複製なし）。
+    _processTextHandler = ProcessTextHandler(
+      onPayloadReceived: _handleSharedPayload,
+    );
+    _processTextHandler.startListening();
   }
 
   Future<void> _checkInitialShareIntent() async {
+    // 選択テキスト→ReadAloud MVP: No.94で判明したflutter_sharing_intent側の
+    // stale initial payloadのrisk（プラグイン内部のinitialSharing/latestSharing
+    // が、無関係な過去のACTION_SEND由来のまま残り得る）を踏まえ、現在の
+    // Android Intentが実際にACTION_PROCESS_TEXTだった場合にそちらを優先
+    // させるため、ProcessTextHandler側を先に確認する。
+    //
+    // pullInitialProcessText()はQuick Listenを開く処理まで内部で完結させる
+    // （ProcessTextHandler.drainPendingProcessText()参照）ため、ここでは
+    // 戻り値をそのまま_handleSharedPayload()へ渡す必要はない。
+    //
+    // 【重要】戻り値がfalseでも、hasDeliveredProcessTextがtrueなら
+    // 「現在の起動はPROCESS_TEXTによるものだったが、native→Dart通知経由で
+    // 既に処理済み」という意味であり、その場合もShareIntentHandler側へは
+    // フォールスルーしない（stale ACTION_SEND initial payloadを優先させない
+    // ため。詳細はProcessTextHandlerのdocコメント「arbitration」参照）。
+    final pulledNow = await _processTextHandler.pullInitialProcessText();
+    if (pulledNow || _processTextHandler.hasDeliveredProcessText) {
+      return;
+    }
     final payload = await _shareIntentHandler.getInitialSharedPayload();
     if (payload != null) await _handleSharedPayload(payload);
   }
@@ -213,6 +240,7 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
   @override
   void dispose() {
     _shareIntentHandler.dispose();
+    _processTextHandler.dispose();
     super.dispose();
   }
 
