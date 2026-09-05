@@ -9,6 +9,7 @@ import '../repository/tts/tts_service.dart';
 import '../usecase/content/save_content_usecase.dart';
 import '../usecase/tts/count_tts_usage_usecase.dart';
 import '../util/debug_logger.dart';
+import '../util/share_fingerprint.dart';
 
 class QuickListenState {
   final QuickListenSession? session;
@@ -165,6 +166,15 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
       'sourceType': session.sourceType,
       'replacedExistingSession': replacedExisting,
       'highlightPositionAtStart': state.highlightPosition,
+      // No.94 Observability: session.textはmain.dart _handleSharedPayload()で
+      // 既にDart側`.trim()`済みの値（QuickListenScreen(initialText: text)経由）。
+      // 比較ルール上、このpayloadHash(raw)は「Dart trimmed hash ↔ Quick Listen
+      // raw/session hash」というpost-trim境界の比較に使う値であり、
+      // native/plugin境界のprimary identity比較にはshare_classified等の
+      // payloadHash(=trim前のDart classify結果)を使うこと（詳細は
+      // ShareFingerprintのdocコメント参照）。
+      'payloadHash': ShareFingerprint.sha256Hex(session.text),
+      'trimmedPayloadHash': ShareFingerprint.sha256Hex(session.text.trim()),
     }));
   }
 

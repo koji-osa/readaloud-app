@@ -181,6 +181,33 @@ void main() {
       expect(find.text('HOME_MARKER'), findsOneWidget);
     },
   );
+
+  testWidgets(
+      'No.94 Observability: QuickListen push後、最初のframe後にquick_listen_route_'
+      'visibilityがisCurrent=true/isActive=trueで1回記録される', (tester) async {
+    final harnessKey = GlobalKey<_QuickListenNavHarnessState>();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          quickListenViewModelProvider.overrideWith((ref) => _buildTestViewModel()),
+        ],
+        child: MaterialApp(home: _QuickListenNavHarness(key: harnessKey)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await harnessKey.currentState!.share('共有された本文A');
+    await tester.pumpAndSettle();
+
+    final visibilityLines = DebugLogger.testSink!
+        .where((l) => l.contains('event=quick_listen_route_visibility'))
+        .toList();
+
+    expect(visibilityLines, hasLength(1));
+    expect(visibilityLines.single, contains('isCurrent=true'));
+    expect(visibilityLines.single, contains('isActive=true'));
+  });
 }
 
 QuickListenViewModel _buildTestViewModel() {

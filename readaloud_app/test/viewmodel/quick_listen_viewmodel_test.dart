@@ -11,6 +11,7 @@ import 'package:readaloud_app/usecase/content/save_content_usecase.dart';
 import 'package:readaloud_app/usecase/tts/check_tts_limit_usecase.dart';
 import 'package:readaloud_app/usecase/tts/count_tts_usage_usecase.dart';
 import 'package:readaloud_app/util/debug_logger.dart';
+import 'package:readaloud_app/util/share_fingerprint.dart';
 import 'package:readaloud_app/viewmodel/quick_listen_viewmodel.dart';
 
 void main() {
@@ -479,6 +480,21 @@ void main() {
       expect(position, 0,
           reason: 'pause()はgetCurrentPosition()由来の値を使うため601に汚染されない'
               '（本テストのFakeはgetCurrentPosition: () => 0固定）');
+    });
+
+    test(
+        'No.94 Observability: quick_listen_session_startedにpayloadHash/'
+        'trimmedPayloadHashが記録され、本文そのものは含まれない', () async {
+      const secret = 'SECRET_TEST_PAYLOAD_12345';
+      viewModel.start(QuickListenSession(text: secret));
+
+      final line = DebugLogger.testSink!
+          .firstWhere((l) => l.contains('event=quick_listen_session_started'));
+
+      final expectedHash = ShareFingerprint.sha256Hex(secret);
+      expect(line, contains('payloadHash=$expectedHash'));
+      expect(line, contains('trimmedPayloadHash=$expectedHash'));
+      expect(line, isNot(contains(secret)));
     });
 
     test('_handleSharedPayload()相当: セッション未設定のままpositionイベントが届いても'

@@ -130,6 +130,48 @@ void main() {
 
       expect(line, isNot(contains('clipboardText=')));
     });
+
+    // No.94 Observability: payloadHash/trimmedPayloadHash等のfingerprint系
+    // フィールド名が、'text'を単語として含むキー('textHash'等)と衝突して
+    // 誤って除外されないことを保証する回帰テスト。
+    test('payloadHash/trimmedPayloadHashは除外されず出力される', () {
+      final line = DebugLogger.formatEvent('quick_listen_session_started', {
+        'sessionId': 's1',
+        'charCount': 10,
+        'trimmedCharCount': 8,
+        'payloadHash': 'abc123',
+        'trimmedPayloadHash': 'def456',
+      });
+
+      expect(line, contains('payloadHash=abc123'));
+      expect(line, contains('trimmedPayloadHash=def456'));
+      expect(line, contains('charCount=10'));
+      expect(line, contains('trimmedCharCount=8'));
+    });
+
+    test('（参考: 命名の理由）textHash/trimmedTextHashは"text"を単語として含むため'
+        '除外される。No.94実装がpayloadHash名を採用しているのはこのため', () {
+      final line = DebugLogger.formatEvent('quick_listen_session_started', {
+        'textHash': 'abc123',
+        'trimmedTextHash': 'def456',
+        'sessionId': 's1',
+      });
+
+      expect(line, isNot(contains('textHash=')));
+      expect(line, contains('sessionId=s1'));
+    });
+
+    test('候補診断系フィールド(candidateCount/selectedIndex/selectedKind)は除外されない',
+        () {
+      final line = DebugLogger.formatEvent('share_classified', {
+        'candidateCount': 2,
+        'selectedIndex': 1,
+        'selectedKind': 'text',
+      });
+
+      expect(line,
+          'event=share_classified candidateCount=2 selectedIndex=1 selectedKind=text');
+    });
   });
 
   group('DebugLogger.logEvent (testSink経由)', () {
