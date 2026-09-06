@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.webkit.URLUtil
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -93,6 +94,28 @@ import java.security.MessageDigest
  * privacy-safeに記録する。既存のLogcat出力(`logShareIntentIfPresent`)や
  * ACTION_SEND/PROCESS_TEXTの処理順序・delivery方式は一切変更しない
  * （観測点の追加のみ）。
+ *
+ * 【No.94 ACTION_SEND delivery race fix】
+ * flutter_sharing_intent 2.0.4のAndroid実装は、ACTION_SEND到達時に
+ * `eventSinkSharing`（Dart側`getMediaStream()`のlistener登録後にのみ
+ * non-null）がまだnullだと、payloadを`latestSharing`へ保存するのみで
+ * Dartへは何も配信しない。かつ`onListen()`側のcached `latestSharing`
+ * 再配信コードはコメントアウトされている（upstream Issue #46・PR #107で
+ * 修正済みだが、本アプリが使用する2.0.4には未反映）。そのため
+ * 「ACTION_SEND到着 → (listener未登録) → listener登録」という順序に
+ * なると、本文が両側どこにも残らず消失する（Home画面に留まる症状）。
+ *
+ * plugin本体を改変せず、PROCESS_TEXTと全く同じ設計原則
+ * （native→Dartのpushは`actionSendAvailable`という本文を含まない通知のみ、
+ * 本文を渡す経路は`pullPendingActionSend()`の応答だけ、読み取りと同時に
+ * atomic consume）をACTION_SEND(text/plain)にも適用し、
+ * [pendingActionSendText]/[pendingActionSendKind]をReadAloud独自の
+ * 唯一の情報源とする。Android側ではDart側(ActionSendHandler)を
+ * text/plain ACTION_SENDの唯一の配信経路とし、flutter_sharing_intentの
+ * Dart API(`getMediaStream()`/`getInitialSharing()`)はこの用途では
+ * 使用しない（lib/main.dartのプラットフォーム分岐参照）。plugin native側の
+ * `handleIntent()`自体は変更していないため引き続き内部状態を更新するが、
+ * その値をDartへ配信する経路をAndroidでは使わないため二重配信は起こらない。
  */
 class MainActivity : AudioServiceActivity() {
     // ACTION_PROCESS_TEXTで受け取った選択テキストの唯一の情報源。
@@ -107,6 +130,11 @@ class MainActivity : AudioServiceActivity() {
     // channel名が同じであれば新しいMethodChannelインスタンスからの
     // invokeMethod()も正しく届く）。
     private var processTextMethodChannel: MethodChannel? = null
+
+    // No.94 ACTION_SEND delivery race fix: text/plain ACTION_SENDで受け取った
+    // 本文のDart側への橋渡し用チャネル。processTextMethodChannel同様、
+    // configureFlutterEngine()のたびに再生成される。
+    private var actionSendMethodChannel: MethodChannel? = null
 
     // Persistent Share Observability Phase 1: このActivityインスタンスを
     // 識別するID（本文を含まない、process内identity）。Activity再生成
@@ -134,6 +162,7 @@ class MainActivity : AudioServiceActivity() {
         logShareIntentIfPresent(intent, stage = "on_create")
         persistShareIntentEvent(intent, stage = "on_create")
         captureProcessTextIfPresent(intent)
+        captureActionSendIfPresent(intent)
         // super.onCreate()の中でconfigureFlutterEngine()が呼ばれ、
         // processTextMethodChannelがセットされたうえで通知が試みられる
         // （cached engineでDartが既に生存していれば、ここで即座に届く）。
@@ -197,11 +226,13 @@ class MainActivity : AudioServiceActivity() {
         logShareIntentIfPresent(intent, stage = "on_new_intent")
         persistShareIntentEvent(intent, stage = "on_new_intent")
         captureProcessTextIfPresent(intent)
+        captureActionSendIfPresent(intent)
         super.onNewIntent(intent)
         // onNewIntent()ではconfigureFlutterEngine()は再度呼ばれない
         // （Activity-engineの接続は既に確立済みのため）。そのためここで
         // 明示的に通知を試みる。
         notifyProcessTextAvailableIfPending()
+        notifyActionSendAvailableIfPending()
         nativeObservability.logEvent(
             "activity_lifecycle",
             mapOf("stage" to "on_new_intent_exit", "activityInstanceId" to activityInstanceId),
@@ -247,6 +278,39 @@ class MainActivity : AudioServiceActivity() {
             }
         }
 
+        // No.94 ACTION_SEND delivery race fix専用のMethodChannel。
+        val actionSendChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ACTION_SEND_METHOD_CHANNEL,
+        )
+        actionSendMethodChannel = actionSendChannel
+        actionSendChannel.setMethodCallHandler { call, result ->
+            if (call.method == "pullPendingActionSend") {
+                nativeObservability.logEvent(
+                    "action_send_bridge",
+                    mapOf("stage" to "pull_requested"),
+                )
+                // 本文(+kind)をDartへ渡す唯一の消費経路。読み取りと同時に
+                // クリアする（このメソッドだけが本文を返す。
+                // actionSendAvailable通知は本文を一切運ばない）。
+                val text = pendingActionSendText
+                val kind = pendingActionSendKind
+                if (text != null) {
+                    result.success(mapOf("text" to text, "kind" to (kind ?: "text")))
+                } else {
+                    result.success(null)
+                }
+                pendingActionSendText = null
+                pendingActionSendKind = null
+                nativeObservability.logEvent(
+                    "action_send_bridge",
+                    mapOf("stage" to "pull_returned", "present" to (text != null)),
+                )
+            } else {
+                result.notImplemented()
+            }
+        }
+
         // Persistent Share Observability Phase 1専用のMethodChannel。
         // 診断情報(native persistent share log snapshot)取得専用であり、
         // ACTION_SEND/PROCESS_TEXT deliveryには一切使用しない。
@@ -278,6 +342,7 @@ class MainActivity : AudioServiceActivity() {
         // 試みる。genuine cold startの場合はDart側handlerが未登録のため
         // 通知は届かないが、Dart起動後のpull fallbackで回収される。
         notifyProcessTextAvailableIfPending()
+        notifyActionSendAvailableIfPending()
 
         nativeObservability.logEvent(
             "flutter_engine_lifecycle",
@@ -361,6 +426,94 @@ class MainActivity : AudioServiceActivity() {
             mapOf("stage" to "notification_attempted"),
         )
         channel.invokeMethod("processTextAvailable", null)
+    }
+
+    // No.94 ACTION_SEND delivery race fix: text/plain ACTION_SENDだけを
+    // 対象にする（ACTION_SEND_MULTIPLEやfile/image共有は今回対象外）。
+    // PROCESS_TEXTと同じFLAG_ACTIVITY_LAUNCHED_FROM_HISTORY Gateを適用し、
+    // 履歴・task復元経由の古いIntent再処理を防ぐ。
+    private fun captureActionSendIfPresent(intent: Intent?) {
+        try {
+            nativeObservability.logEvent(
+                "action_send_bridge",
+                mapOf("stage" to "capture_attempted"),
+            )
+            if (intent == null || intent.action != Intent.ACTION_SEND) {
+                nativeObservability.logEvent(
+                    "action_send_bridge",
+                    mapOf("stage" to "capture_skipped", "reason" to "wrong_action"),
+                )
+                return
+            }
+            if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
+                nativeObservability.logEvent(
+                    "action_send_bridge",
+                    mapOf(
+                        "stage" to "capture_skipped",
+                        "reason" to "launched_from_history",
+                    ),
+                )
+                return
+            }
+            if (intent.type?.startsWith("text") != true) {
+                nativeObservability.logEvent(
+                    "action_send_bridge",
+                    mapOf("stage" to "capture_skipped", "reason" to "wrong_type"),
+                )
+                return
+            }
+            // flutter_sharing_intent(getSharingText())と同じくEXTRA_TEXTのみを
+            // 情報源とする（ClipDataへはフォールバックしない）。EXTRA_TEXTは
+            // CharSequence仕様のため、getCharSequenceExtra()で取得する
+            // （logShareIntentIfPresent/persistShareIntentEventと同じ理由）。
+            val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            if (text.isNullOrEmpty()) {
+                nativeObservability.logEvent(
+                    "action_send_bridge",
+                    mapOf("stage" to "capture_skipped", "reason" to "missing_payload"),
+                )
+                return
+            }
+            // 既存flutter_sharing_intent(getTypeForTextAndUrl())と同じ
+            // URLUtil.isValidUrlでURL/textを判定し、意味を揃える。
+            val kind = if (URLUtil.isValidUrl(text)) "url" else "text"
+            pendingActionSendText = text
+            pendingActionSendKind = kind
+            nativeObservability.logEvent(
+                "action_send_bridge",
+                mapOf("stage" to "captured", "charCount" to text.length, "kind" to kind),
+            )
+        } catch (t: Throwable) {
+            // Observability/橋渡しコード自身が原因でIntent処理やアプリ起動を
+            // 止めることは絶対に避ける。
+            Log.w(TAG, "captureActionSendIfPresent failed: ${t.javaClass.name}")
+        }
+    }
+
+    // pendingActionSendTextが存在することをDartへ「通知」するだけの
+    // fire-and-forget呼び出し。本文は一切運ばない（notifyProcessTextAvailableIfPending
+    // と同じ設計）。
+    private fun notifyActionSendAvailableIfPending() {
+        val channel = actionSendMethodChannel
+        if (channel == null) {
+            nativeObservability.logEvent(
+                "action_send_bridge",
+                mapOf("stage" to "notification_skipped", "reason" to "channel_not_ready"),
+            )
+            return
+        }
+        if (pendingActionSendText == null) {
+            nativeObservability.logEvent(
+                "action_send_bridge",
+                mapOf("stage" to "notification_skipped", "reason" to "no_pending"),
+            )
+            return
+        }
+        nativeObservability.logEvent(
+            "action_send_bridge",
+            mapOf("stage" to "notification_attempted"),
+        )
+        channel.invokeMethod("actionSendAvailable", null)
     }
 
     private fun logShareIntentIfPresent(intent: Intent?, stage: String) {
@@ -520,7 +673,23 @@ class MainActivity : AudioServiceActivity() {
         private const val MAX_LOGGED_CLIP_ITEMS = 3
         private const val PROCESS_TEXT_METHOD_CHANNEL =
             "com.example.readaloud_app/process_text"
+        private const val ACTION_SEND_METHOD_CHANNEL =
+            "com.example.readaloud_app/action_send"
         private const val NATIVE_SHARE_OBSERVABILITY_METHOD_CHANNEL =
             "com.example.readaloud_app/native_share_observability"
+
+        // No.94 ACTION_SEND delivery race fix: text/plain ACTION_SENDの
+        // 唯一の情報源。companion object（process lifetimeで生存）で保持する
+        // ことで、cached FlutterEngineでActivity instanceだけが再生成される
+        // ケースでもcapture済みpayloadを失わない。Dart側の
+        // `pullPendingActionSend`呼び出し（唯一の消費経路）で読み取りと
+        // 同時にクリアする（atomic consume）。Intent配信・MethodChannel
+        // 呼び出しは全てmain/platform thread上でのみ行われるため、
+        // @Volatile以上の同期は不要。
+        @Volatile
+        private var pendingActionSendText: String? = null
+
+        @Volatile
+        private var pendingActionSendKind: String? = null
     }
 }
