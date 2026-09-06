@@ -2,6 +2,8 @@ package com.example.readaloud_app
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -9,8 +11,9 @@ import io.flutter.plugin.common.MethodChannel
 import java.security.MessageDigest
 
 /**
- * No.94 Observability専用の最小限のフック、および選択テキスト→ReadAloud
- * (ACTION_PROCESS_TEXT)の受け口。
+ * No.94 Observability専用の最小限のフック、選択テキスト→ReadAloud
+ * (ACTION_PROCESS_TEXT)の受け口、およびPersistent Share Observability
+ * Phase 1のnative側イベント発生源。
  *
  * flutter_sharing_intentプラグイン(FlutterSharingIntentPlugin.onAttachedToActivity /
  * onNewIntent)がIntentを処理する前に、Activityが実際に受け取ったIntentの
@@ -80,6 +83,16 @@ import java.security.MessageDigest
  * 変わらない（setResult()を呼ばずにfinish/pause相当になった場合、選択元は
  * RESULT_CANCELED相当として扱い元のテキストをそのまま維持するため、
  * READONLYフラグの値ごとの分岐は不要）。
+ *
+ * 【Persistent Share Observability Phase 1】
+ * No.94（ACTION_SEND間欠配信消失、root cause未確定）の次回自然再発時に、
+ * ADB/Logcatをリアルタイム接続していなくても事後のログexportだけで
+ * native→Dart境界を切り分けられるようにするため、[NativeShareObservability]
+ * （Dart DebugLoggerとは独立したnative側永続ロガー）へ、Activity/
+ * FlutterEngineのlifecycle・Intent受信・PROCESS_TEXT bridgeの状態を
+ * privacy-safeに記録する。既存のLogcat出力(`logShareIntentIfPresent`)や
+ * ACTION_SEND/PROCESS_TEXTの処理順序・delivery方式は一切変更しない
+ * （観測点の追加のみ）。
  */
 class MainActivity : AudioServiceActivity() {
     // ACTION_PROCESS_TEXTで受け取った選択テキストの唯一の情報源。
@@ -95,26 +108,115 @@ class MainActivity : AudioServiceActivity() {
     // invokeMethod()も正しく届く）。
     private var processTextMethodChannel: MethodChannel? = null
 
+    // Persistent Share Observability Phase 1: このActivityインスタンスを
+    // 識別するID（本文を含まない、process内identity）。Activity再生成
+    // （cached engineでのActivityだけの再生成等）の前後を区別するために使う。
+    private val activityInstanceId = System.identityHashCode(this)
+
+    // getNativeShareLogSnapshot()の応答をmain threadへpostするためのHandler。
+    // MethodChannel.Resultはmain thread(platform thread)から呼ぶ前提のため。
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val nativeObservability: NativeShareObservability
+        get() = NativeShareObservability.getInstance(applicationContext)
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf(
+                "stage" to "on_create_enter",
+                "activityInstanceId" to activityInstanceId,
+                "taskId" to taskId,
+                "isTaskRoot" to isTaskRoot,
+                "savedInstanceStatePresent" to (savedInstanceState != null),
+            ),
+        )
         logShareIntentIfPresent(intent, stage = "on_create")
+        persistShareIntentEvent(intent, stage = "on_create")
         captureProcessTextIfPresent(intent)
         // super.onCreate()の中でconfigureFlutterEngine()が呼ばれ、
         // processTextMethodChannelがセットされたうえで通知が試みられる
         // （cached engineでDartが既に生存していれば、ここで即座に届く）。
         super.onCreate(savedInstanceState)
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf("stage" to "on_create_exit", "activityInstanceId" to activityInstanceId),
+        )
+    }
+
+    override fun onStart() {
+        super.onStart()
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf("stage" to "on_start", "activityInstanceId" to activityInstanceId),
+        )
+    }
+
+    override fun onResume() {
+        super.onResume()
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf("stage" to "on_resume", "activityInstanceId" to activityInstanceId),
+        )
+    }
+
+    override fun onPause() {
+        super.onPause()
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf("stage" to "on_pause", "activityInstanceId" to activityInstanceId),
+        )
+    }
+
+    override fun onStop() {
+        super.onStop()
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf("stage" to "on_stop", "activityInstanceId" to activityInstanceId),
+        )
+    }
+
+    override fun onDestroy() {
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf(
+                "stage" to "on_destroy",
+                "activityInstanceId" to activityInstanceId,
+                "isFinishing" to isFinishing,
+                "isChangingConfigurations" to isChangingConfigurations,
+            ),
+        )
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf("stage" to "on_new_intent_enter", "activityInstanceId" to activityInstanceId),
+        )
         logShareIntentIfPresent(intent, stage = "on_new_intent")
+        persistShareIntentEvent(intent, stage = "on_new_intent")
         captureProcessTextIfPresent(intent)
         super.onNewIntent(intent)
         // onNewIntent()ではconfigureFlutterEngine()は再度呼ばれない
         // （Activity-engineの接続は既に確立済みのため）。そのためここで
         // 明示的に通知を試みる。
         notifyProcessTextAvailableIfPending()
+        nativeObservability.logEvent(
+            "activity_lifecycle",
+            mapOf("stage" to "on_new_intent_exit", "activityInstanceId" to activityInstanceId),
+        )
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        nativeObservability.logEvent(
+            "flutter_engine_lifecycle",
+            mapOf(
+                "stage" to "configure_flutter_engine_enter",
+                "activityInstanceId" to activityInstanceId,
+                "flutterEngineInstanceId" to System.identityHashCode(flutterEngine),
+            ),
+        )
         // 既存のGeneratedPluginRegistrant経由のplugin登録(flutter_sharing_intent
         // 含む)を必ず先に完了させる。plugin本体の初期化順序・挙動は変更しない。
         super.configureFlutterEngine(flutterEngine)
@@ -126,11 +228,46 @@ class MainActivity : AudioServiceActivity() {
         processTextMethodChannel = channel
         channel.setMethodCallHandler { call, result ->
             if (call.method == "pullPendingProcessText") {
+                nativeObservability.logEvent(
+                    "process_text_bridge",
+                    mapOf("stage" to "pull_requested"),
+                )
                 // 選択テキスト本文をDartへ渡す唯一の消費経路。読み取りと
                 // 同時にクリアする（このメソッドだけが本文を返す。
                 // processTextAvailable通知は本文を一切運ばない）。
-                result.success(pendingProcessText)
+                val text = pendingProcessText
+                result.success(text)
                 pendingProcessText = null
+                nativeObservability.logEvent(
+                    "process_text_bridge",
+                    mapOf("stage" to "pull_returned", "present" to (text != null)),
+                )
+            } else {
+                result.notImplemented()
+            }
+        }
+
+        // Persistent Share Observability Phase 1専用のMethodChannel。
+        // 診断情報(native persistent share log snapshot)取得専用であり、
+        // ACTION_SEND/PROCESS_TEXT deliveryには一切使用しない。
+        val observabilityChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            NATIVE_SHARE_OBSERVABILITY_METHOD_CHANNEL,
+        )
+        observabilityChannel.setMethodCallHandler { call, result ->
+            if (call.method == "getNativeShareLogSnapshot") {
+                nativeObservability.getSnapshotAsync { snapshot ->
+                    // MethodChannel.Resultはmain(platform) threadから呼ぶ前提。
+                    mainHandler.post {
+                        try {
+                            result.success(snapshot)
+                        } catch (t: Throwable) {
+                            // Activity/engineが既にdetachしている等で応答不可の
+                            // 場合は無視する（診断機能自体の失敗でアプリを
+                            // 落とさない）。
+                        }
+                    }
+                }
             } else {
                 result.notImplemented()
             }
@@ -141,20 +278,56 @@ class MainActivity : AudioServiceActivity() {
         // 試みる。genuine cold startの場合はDart側handlerが未登録のため
         // 通知は届かないが、Dart起動後のpull fallbackで回収される。
         notifyProcessTextAvailableIfPending()
+
+        nativeObservability.logEvent(
+            "flutter_engine_lifecycle",
+            mapOf(
+                "stage" to "configure_flutter_engine_exit",
+                "activityInstanceId" to activityInstanceId,
+                "flutterEngineInstanceId" to System.identityHashCode(flutterEngine),
+            ),
+        )
     }
 
     private fun captureProcessTextIfPresent(intent: Intent?) {
         try {
-            if (intent == null || intent.action != Intent.ACTION_PROCESS_TEXT) return
+            nativeObservability.logEvent(
+                "process_text_bridge",
+                mapOf("stage" to "capture_attempted"),
+            )
+            if (intent == null || intent.action != Intent.ACTION_PROCESS_TEXT) {
+                nativeObservability.logEvent(
+                    "process_text_bridge",
+                    mapOf("stage" to "capture_skipped", "reason" to "wrong_action"),
+                )
+                return
+            }
             if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
                 // 履歴・task復元経由で古いPROCESS_TEXT Intentが再送される
                 // ケースを無視する（class docの「FLAG_ACTIVITY_LAUNCHED_
                 // FROM_HISTORY Gate」参照）。
+                nativeObservability.logEvent(
+                    "process_text_bridge",
+                    mapOf(
+                        "stage" to "capture_skipped",
+                        "reason" to "launched_from_history",
+                    ),
+                )
                 return
             }
             val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
-                ?: return
+            if (text == null) {
+                nativeObservability.logEvent(
+                    "process_text_bridge",
+                    mapOf("stage" to "capture_skipped", "reason" to "missing_payload"),
+                )
+                return
+            }
             pendingProcessText = text
+            nativeObservability.logEvent(
+                "process_text_bridge",
+                mapOf("stage" to "captured", "charCount" to text.length),
+            )
         } catch (t: Throwable) {
             // Observability/橋渡しコード自身が原因でIntent処理やアプリ起動を
             // 止めることは絶対に避ける。
@@ -168,8 +341,25 @@ class MainActivity : AudioServiceActivity() {
     // この通知が何回・どのタイミングで届いても（またはDart側handler未登録で
     // 届かなくても）、二重に本文が渡ることは構造的に起こらない。
     private fun notifyProcessTextAvailableIfPending() {
-        val channel = processTextMethodChannel ?: return
-        if (pendingProcessText == null) return
+        val channel = processTextMethodChannel
+        if (channel == null) {
+            nativeObservability.logEvent(
+                "process_text_bridge",
+                mapOf("stage" to "notification_skipped", "reason" to "channel_not_ready"),
+            )
+            return
+        }
+        if (pendingProcessText == null) {
+            nativeObservability.logEvent(
+                "process_text_bridge",
+                mapOf("stage" to "notification_skipped", "reason" to "no_pending"),
+            )
+            return
+        }
+        nativeObservability.logEvent(
+            "process_text_bridge",
+            mapOf("stage" to "notification_attempted"),
+        )
         channel.invokeMethod("processTextAvailable", null)
     }
 
@@ -252,6 +442,73 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /**
+     * Persistent Share Observability Phase 1: [logShareIntentIfPresent]と
+     * 同等以上のprivacy-safe情報を、Logcatとは独立してnative永続ログへも
+     * 残す。[logShareIntentIfPresent]自体は一切変更せず、既存のLogcat出力
+     * フォーマット・内容を完全に保つ（既存observabilityの回帰防止）。
+     */
+    private fun persistShareIntentEvent(intent: Intent?, stage: String) {
+        try {
+            if (intent == null) return
+            val fields = LinkedHashMap<String, Any?>()
+            fields["stage"] = stage
+            fields["action"] = intent.action ?: "null"
+            fields["type"] = intent.type ?: "null"
+            fields["flags"] = intent.flags
+            fields["launchedFromHistory"] =
+                (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+
+            val extraText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            fields["hasExtraText"] = extraText != null
+            if (extraText != null) {
+                val trimmed = extraText.trim()
+                fields["extraTextCharCount"] = extraText.length
+                fields["extraTextTrimmedCharCount"] = trimmed.length
+                fields["extraTextHash"] = sha256Hex(extraText)
+                fields["extraTextTrimmedHash"] = sha256Hex(trimmed)
+            }
+
+            val extraProcessText =
+                intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+            fields["hasExtraProcessText"] = extraProcessText != null
+            if (extraProcessText != null) {
+                val trimmedProcessText = extraProcessText.trim()
+                fields["extraProcessTextCharCount"] = extraProcessText.length
+                fields["extraProcessTextTrimmedCharCount"] = trimmedProcessText.length
+                fields["extraProcessTextHash"] = sha256Hex(extraProcessText)
+                fields["extraProcessTextTrimmedHash"] = sha256Hex(trimmedProcessText)
+            }
+
+            val clipData = intent.clipData
+            fields["hasClipData"] = clipData != null
+            if (clipData != null) {
+                val itemCount = clipData.itemCount
+                fields["clipDataItemCount"] = itemCount
+                val limit = minOf(itemCount, MAX_LOGGED_CLIP_ITEMS)
+                for (i in 0 until limit) {
+                    val item = clipData.getItemAt(i)
+                    val text = item.text?.toString()
+                    fields["clipItem${i}TextPresent"] = text != null
+                    if (text != null) {
+                        val trimmedText = text.trim()
+                        fields["clipItem${i}TextCharCount"] = text.length
+                        fields["clipItem${i}TextTrimmedCharCount"] = trimmedText.length
+                        fields["clipItem${i}TextHash"] = sha256Hex(text)
+                        fields["clipItem${i}TextTrimmedHash"] = sha256Hex(trimmedText)
+                    }
+                    fields["clipItem${i}UriPresent"] = item.uri != null
+                    fields["clipItem${i}IntentPresent"] = item.intent != null
+                    fields["clipItem${i}HtmlTextPresent"] = item.htmlText != null
+                }
+            }
+
+            nativeObservability.logEvent("native_share_intent_persisted", fields)
+        } catch (t: Throwable) {
+            Log.w(TAG, "persistShareIntentEvent failed: ${t.javaClass.name}")
+        }
+    }
+
     private fun sha256Hex(value: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))
@@ -263,5 +520,7 @@ class MainActivity : AudioServiceActivity() {
         private const val MAX_LOGGED_CLIP_ITEMS = 3
         private const val PROCESS_TEXT_METHOD_CHANNEL =
             "com.example.readaloud_app/process_text"
+        private const val NATIVE_SHARE_OBSERVABILITY_METHOD_CHANNEL =
+            "com.example.readaloud_app/native_share_observability"
     }
 }

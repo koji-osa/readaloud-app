@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 /// FIX-021調査用デバッグロガー
 /// 一時停止・再開時のTTS再生位置情報をファイルに記録する
@@ -127,7 +128,73 @@ class DebugLogger {
     await log('RESUME: currentPosition=$currentPosition chunkIndex=$chunkIndex chunkStart=$chunkStart');
   }
 
-  /// Downloadフォルダにコピーする
+  // Persistent Share Observability Phase 1: native側(MainActivity.kt +
+  // NativeShareObservability.kt)のpersistent share logを取得するための
+  // 診断専用MethodChannel。ACTION_SEND/PROCESS_TEXT deliveryには使用しない。
+  static const MethodChannel _nativeShareObservabilityChannel =
+      MethodChannel('com.example.readaloud_app/native_share_observability');
+
+  /// [fetchNativeShareObservabilitySnapshot]の既定timeout。
+  ///
+  /// native側が何らかの理由で`MethodChannel.Result`を一切呼ばない場合
+  /// （ChatGPT precommit review v2 Fix 1）、awaitしているFutureが永遠に
+  /// 完了せず、既存の「ログ出力」操作自体がhangしてしまう。診断用途として
+  /// 妥当な固定値としてこのtimeoutを設ける。
+  @visibleForTesting
+  static const Duration nativeShareObservabilityTimeout = Duration(seconds: 3);
+
+  /// nativeのpersistent share observability snapshotを取得する。
+  ///
+  /// 取得失敗時（MissingPluginException、その他のPlatformException、
+  /// [timeout]超過等）はnullを返す。[copyToDownloads]はこれを使って
+  /// graceful degradationする（native取得に失敗してもDartログ単体の
+  /// exportは従来どおり成功させる）。テスト容易性のためpublicにしている
+  /// （native側からの文字列をそのまま返すだけで、本文相当のデータを
+  /// ここで新たに生成することはない）。[timeout]はテストでのみ短縮値を
+  /// 注入する想定（production呼び出しは既定値を使う）。
+  @visibleForTesting
+  Future<String?> fetchNativeShareObservabilitySnapshot({
+    Duration timeout = nativeShareObservabilityTimeout,
+  }) async {
+    try {
+      return await _nativeShareObservabilityChannel
+          .invokeMethod<String>('getNativeShareLogSnapshot')
+          .timeout(timeout);
+    } catch (e) {
+      debugPrint(
+          '[DebugLogger] native share observability snapshot fetch error: $e');
+      return null;
+    }
+  }
+
+  /// Dart診断ログとnative persistent share observabilityログを1つの
+  /// exportファイル用の内容へ結合する（純粋関数・I/Oなし、テスト容易）。
+  /// [nativeSnapshot]がnullまたは空の場合は[dartLogContent]をそのまま返す。
+  /// 本メソッド自体は値の中身を検査・変更しないため、privacy除外の責務は
+  /// 引き続き[formatEvent]/[isForbiddenKey]（Dart側）およびnative側の
+  /// fields構築（呼び出し元）にある。
+  @visibleForTesting
+  static String composeExportContent({
+    required String dartLogContent,
+    String? nativeSnapshot,
+  }) {
+    if (nativeSnapshot == null || nativeSnapshot.isEmpty) {
+      return dartLogContent;
+    }
+    return '$dartLogContent\n'
+        '=== Native Persistent Share Observability ===\n'
+        '$nativeSnapshot';
+  }
+
+  /// Downloadフォルダにコピーする。
+  ///
+  /// Persistent Share Observability Phase 1: 可能であればnative側の
+  /// persistent share observabilityログも取得し、Dart診断ログと1つの
+  /// ファイルへ結合してexportする（ユーザーは既存の「ログ出力」操作を
+  /// 1回行うだけで両方を取得できる）。native側取得に失敗しても、Dart
+  /// 診断ログ単体のexportは従来どおり成功させる（graceful degradation。
+  /// MissingPluginException等でも既存exportを失敗させない）。
+  /// 元の[_logFile]自体は書き換えない（結合はexportコピー時のみ）。
   Future<String?> copyToDownloads() async {
     if (!_isInitialized || _logFile == null) return null;
     try {
@@ -140,7 +207,14 @@ class DebugLogger {
       final downloadDir = Directory(downloadPath);
       if (!await downloadDir.exists()) return null;
       final dest = File('$downloadPath/${_logFile!.path.split('/').last}');
-      await _logFile!.copy(dest.path);
+
+      final dartLogContent = await _logFile!.readAsString();
+      final nativeSnapshot = await fetchNativeShareObservabilitySnapshot();
+      final combined = composeExportContent(
+        dartLogContent: dartLogContent,
+        nativeSnapshot: nativeSnapshot,
+      );
+      await dest.writeAsString(combined);
       return dest.path;
     } catch (e) {
       debugPrint('[DebugLogger] copyToDownloads error: $e');

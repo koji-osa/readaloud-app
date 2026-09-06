@@ -390,4 +390,106 @@ void main() {
       handler.dispose();
     });
   });
+
+  group('ShareIntentHandler.startListening/dispose '
+      '(Persistent Share Observability Phase 1: listener lifecycle)', () {
+    // No.94(ACTION_SEND間欠配信消失)の切り分け材料として、listenerの
+    // 生存期間そのものをobservability対象にした。ここでは、追加した
+    // lifecycle logging自体が既存のpayload delivery・dispose挙動を
+    // 変えていないことを確認する。
+    setUp(() {
+      DebugLogger.testSink = [];
+    });
+
+    tearDown(() {
+      DebugLogger.testSink = null;
+    });
+
+    test('startListening()はshare_listener_start_requested→'
+        'share_listener_started→share_stream_subscription_createdの順で記録する',
+        () {
+      final handler = ShareIntentHandler(onPayloadReceived: (_) {});
+      handler.startListening();
+
+      final eventNames = DebugLogger.testSink!
+          .map((l) => l.split(' ').first.replaceFirst('event=', ''))
+          .toList();
+      expect(
+        eventNames,
+        [
+          'share_listener_start_requested',
+          'share_listener_started',
+          'share_stream_subscription_created',
+        ],
+      );
+
+      handler.dispose();
+    });
+
+    test('dispose()はshare_listener_dispose_requestedを記録し、'
+        'cancel()完了後にshare_listener_dispose_completedを記録する（既存の'
+        'dispose()呼び出し規約(戻り値void・同期呼び出し)は変更しない）', () async {
+      final handler = ShareIntentHandler(onPayloadReceived: (_) {});
+      handler.startListening();
+      DebugLogger.testSink!.clear();
+
+      // 既存呼び出し元(main.dartのdispose())と同じく、戻り値を待たずに
+      // 同期的に呼ぶ。
+      handler.dispose();
+      // cancel()完了(Future)を待つため、1 microtaskだけ進める。
+      await Future<void>.delayed(Duration.zero);
+
+      final eventNames = DebugLogger.testSink!
+          .map((l) => l.split(' ').first.replaceFirst('event=', ''))
+          .toList();
+      expect(
+        eventNames,
+        ['share_listener_dispose_requested', 'share_listener_dispose_completed'],
+      );
+    });
+
+    test('lifecycle loggingを追加しても、EventChannel経由で届いたpayloadは'
+        '従来どおりonPayloadReceivedへ渡される（regressionなし）', () async {
+      // flutter_sharing_intentのFlutterSharingIntent.getMediaStream()は
+      // EventChannel("flutter_sharing_intent/events-sharing")を使う実装に
+      // なっている（pub cache配布ソースで確認済み）。本番コード側に一切
+      // 手を入れず、テスト側だけでこのEventChannelをmockすることで、
+      // 追加したlifecycle loggingが実際のstream配信経路を壊していないことを
+      // 検証できる。
+      TestWidgetsFlutterBinding.ensureInitialized();
+      const eventChannel =
+          EventChannel('flutter_sharing_intent/events-sharing');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+      late void Function(Object?) emit;
+      messenger.setMockStreamHandler(
+        eventChannel,
+        MockStreamHandler.inline(onListen: (arguments, events) {
+          emit = events.success;
+        }),
+      );
+
+      const secret = 'SECRET_STREAM_REGRESSION_CHECK';
+      final received = <String>[];
+      final handler =
+          ShareIntentHandler(onPayloadReceived: (p) => received.add(p.value));
+      handler.startListening();
+      await Future<void>.delayed(Duration.zero);
+
+      emit(jsonEncode([
+        {'value': secret, 'type': SharedMediaType.TEXT.index},
+      ]));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(received, [secret]);
+      // 追加したlifecycle logging自体が本文を漏らしていないことも確認する。
+      for (final line in DebugLogger.testSink!) {
+        expect(line, isNot(contains(secret)));
+      }
+
+      handler.dispose();
+      messenger.setMockStreamHandler(eventChannel, null);
+    });
+  });
 }
