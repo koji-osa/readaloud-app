@@ -35,6 +35,16 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="text/plain"/>
             </intent-filter>
+            <!-- 選択テキスト→ReadAloud MVP: Android標準のテキスト選択メニューに
+                 ReadAloudを候補として表示するためのintent-filter。ACTION_SENDとは
+                 別のintent-filterのため、既存のACTION_SEND処理には影響しない。
+                 選択テキストはEXTRA_PROCESS_TEXT(CharSequence)経由でMainActivity.kt
+                 が受け取り、Dart側(ProcessTextHandler)へ橋渡しする。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
         </activity>
         <service android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"
