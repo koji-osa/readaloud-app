@@ -122,39 +122,60 @@ class ShareIntentHandler {
 
   // アプリ起動中の共有を受け取る
   void startListening() {
+    // Persistent Share Observability Phase 1: No.94(ACTION_SEND間欠配信消失)の
+    // 切り分け材料として、listenerの生存期間そのものをobservability対象にする。
+    // 既存のpayload delivery自体（getMediaStream()/.listen()呼び出し、
+    // classify()の選択ロジック）は一切変更しない。
+    unawaited(DebugLogger.instance.logEvent('share_listener_start_requested', {
+      'listenerInstanceId': _listenerInstanceId,
+    }));
     unawaited(DebugLogger.instance.logEvent('share_listener_started', {
       'listenerInstanceId': _listenerInstanceId,
       'epochMs': DateTime.now().millisecondsSinceEpoch,
     }));
-    _subscription = FlutterSharingIntent.instance
-        .getMediaStream()
-        .listen((List<SharedFile> files) {
-      final flowId = _nextFlowId('stream');
-      unawaited(DebugLogger.instance.logEvent(
-          'share_received', {'source': 'stream', 'flowId': flowId}));
-      SharedTextPayload? payload;
-      try {
-        final diagnostics = diagnoseCandidates(files);
-        payload = classify(files, flowId: flowId);
-        unawaited(DebugLogger.instance.logEvent('share_classified', {
-          'source': 'stream',
-          'kind': payload?.kind.name ?? 'none',
-          'flowId': flowId,
-          ...diagnostics.toLogFields(),
-          if (payload != null)
-            ...ShareFingerprint.metricsOf(payload.value).toLogFields(),
+    _subscription = FlutterSharingIntent.instance.getMediaStream().listen(
+      (List<SharedFile> files) {
+        final flowId = _nextFlowId('stream');
+        unawaited(DebugLogger.instance.logEvent(
+            'share_received', {'source': 'stream', 'flowId': flowId}));
+        SharedTextPayload? payload;
+        try {
+          final diagnostics = diagnoseCandidates(files);
+          payload = classify(files, flowId: flowId);
+          unawaited(DebugLogger.instance.logEvent('share_classified', {
+            'source': 'stream',
+            'kind': payload?.kind.name ?? 'none',
+            'flowId': flowId,
+            ...diagnostics.toLogFields(),
+            if (payload != null)
+              ...ShareFingerprint.metricsOf(payload.value).toLogFields(),
+          }));
+        } catch (e) {
+          unawaited(DebugLogger.instance.logEvent('share_pipeline_error', {
+            'stage': 'classify',
+            'source': 'stream',
+            'flowId': flowId,
+            'errorType': e.runtimeType.toString(),
+          }));
+          rethrow;
+        }
+        if (payload != null) onPayloadReceived(payload);
+      },
+      // No.94のための観測のみ。既存のエラー伝播semantics(onErrorを追加せず
+      // 例外はそのまま伝播させる)は変更しない。getMediaStream()のbroadcast
+      // streamが通常閉じることはないが、万一done通知が来た場合に備えて
+      // listenerの生存状況を記録する。
+      onDone: () {
+        unawaited(DebugLogger.instance.logEvent('share_stream_done', {
+          'listenerInstanceId': _listenerInstanceId,
         }));
-      } catch (e) {
-        unawaited(DebugLogger.instance.logEvent('share_pipeline_error', {
-          'stage': 'classify',
-          'source': 'stream',
-          'flowId': flowId,
-          'errorType': e.runtimeType.toString(),
-        }));
-        rethrow;
-      }
-      if (payload != null) onPayloadReceived(payload);
-    });
+      },
+    );
+    unawaited(
+        DebugLogger.instance.logEvent('share_stream_subscription_created', {
+      'listenerInstanceId': _listenerInstanceId,
+      'subscriptionInstanceId': identityHashCode(_subscription),
+    }));
   }
 
   // アプリ起動時に共有されたテキストを取得
@@ -277,6 +298,18 @@ class ShareIntentHandler {
   }
 
   void dispose() {
-    _subscription?.cancel();
+    unawaited(DebugLogger.instance.logEvent('share_listener_dispose_requested', {
+      'listenerInstanceId': _listenerInstanceId,
+    }));
+    final subscription = _subscription;
+    if (subscription == null) return;
+    // dispose()の戻り値型(void)・呼び出し元の同期呼び出しは変更しない。
+    // cancel()完了のログはfire-and-forgetで追加するのみ。
+    unawaited(subscription.cancel().then((_) {
+      unawaited(
+          DebugLogger.instance.logEvent('share_listener_dispose_completed', {
+        'listenerInstanceId': _listenerInstanceId,
+      }));
+    }));
   }
 }

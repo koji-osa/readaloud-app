@@ -99,7 +99,8 @@ class AppEntryPoint extends ConsumerStatefulWidget {
   ConsumerState<AppEntryPoint> createState() => _AppEntryPointState();
 }
 
-class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
+class _AppEntryPointState extends ConsumerState<AppEntryPoint>
+    with WidgetsBindingObserver {
   bool _isLoading = true;
   bool _onboardingCompleted = false;
   late ShareIntentHandler _shareIntentHandler;
@@ -107,11 +108,43 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
   final QuickListenRouteTracker _quickListenRouteTracker =
       QuickListenRouteTracker();
 
+  // Persistent Share Observability Phase 1: build()のたびに大量ログを
+  // 出さないよう、直前に記録したroot targetを保持し、変化した時だけ記録する。
+  String? _lastLoggedRootTarget;
+  bool _firstPostFrameLogged = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(DebugLogger.instance.logEvent('app_entry_point_mounted', {}));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 最初のframe描画後に1回だけ記録する。native Activityがresumed済み
+      // なのに、Flutter widget側がどこまで進んでいたかを事後確認するための
+      // マーカー（No.94診断用、Observability only）。
+      if (_firstPostFrameLogged) return;
+      _firstPostFrameLogged = true;
+      unawaited(
+          DebugLogger.instance.logEvent('app_entry_point_first_post_frame', {}));
+    });
     _checkOnboarding();
     _initShareIntent();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(DebugLogger.instance.logEvent('app_lifecycle_state_changed', {
+      'state': state.name,
+    }));
+  }
+
+  // Persistent Share Observability Phase 1: build()が返そうとしている
+  // root targetが変化した時だけ記録する（loading/home/onboarding）。
+  void _logRootTargetIfChanged(String target) {
+    if (_lastLoggedRootTarget == target) return;
+    _lastLoggedRootTarget = target;
+    unawaited(
+        DebugLogger.instance.logEvent('app_root_target', {'target': target}));
   }
 
   void _initShareIntent() {
@@ -239,18 +272,24 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(DebugLogger.instance.logEvent('app_entry_point_disposed', {}));
     _shareIntentHandler.dispose();
     _processTextHandler.dispose();
     super.dispose();
   }
 
   Future<void> _checkOnboarding() async {
+    unawaited(DebugLogger.instance.logEvent('onboarding_check_started', {}));
     final SettingsRepository repo = SettingsRepositoryImpl();
     final completed = await repo.get(SettingKeys.onboardingCompleted);
     setState(() {
       _onboardingCompleted = completed == 'true';
       _isLoading = false;
     });
+    unawaited(DebugLogger.instance.logEvent('onboarding_check_completed', {
+      'onboardingCompleted': _onboardingCompleted,
+    }));
     // オンボーディング確認後にShare Intentを確認
     await _checkInitialShareIntent();
   }
@@ -258,14 +297,18 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
+      _logRootTargetIfChanged('loading');
       return const Scaffold(
         body: Center(
           child: CircularProgressIndicator(),
         ),
       );
     }
-    return _onboardingCompleted
-        ? const HomeScreen()
-        : const OnboardingScreen();
+    if (_onboardingCompleted) {
+      _logRootTargetIfChanged('home');
+      return const HomeScreen();
+    }
+    _logRootTargetIfChanged('onboarding');
+    return const OnboardingScreen();
   }
 }

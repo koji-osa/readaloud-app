@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/util/debug_logger.dart';
 
@@ -301,6 +302,126 @@ void main() {
       final content = await logFile.readAsString();
       expect(content, contains('event=late_event_1'));
       expect(content, contains('event=late_event_2'));
+    });
+  });
+
+  group('DebugLogger.composeExportContent (Persistent Share Observability Phase 1)',
+      () {
+    test('nativeSnapshotがnullの場合はDartログ単体を返す（native取得失敗時のgraceful degradation）',
+        () {
+      final result = DebugLogger.composeExportContent(
+        dartLogContent: 'dart log content',
+        nativeSnapshot: null,
+      );
+
+      expect(result, 'dart log content');
+    });
+
+    test('nativeSnapshotが空文字の場合もDartログ単体を返す', () {
+      final result = DebugLogger.composeExportContent(
+        dartLogContent: 'dart log content',
+        nativeSnapshot: '',
+      );
+
+      expect(result, 'dart log content');
+    });
+
+    test('nativeSnapshotがある場合はDartログの後にnative snapshotを結合する', () {
+      final result = DebugLogger.composeExportContent(
+        dartLogContent: 'DART_LOG_CONTENT',
+        nativeSnapshot: 'NATIVE_SNAPSHOT_CONTENT',
+      );
+
+      expect(result, contains('DART_LOG_CONTENT'));
+      expect(result, contains('NATIVE_SNAPSHOT_CONTENT'));
+      expect(result, contains('Native Persistent Share Observability'));
+      expect(
+        result.indexOf('DART_LOG_CONTENT'),
+        lessThan(result.indexOf('NATIVE_SNAPSHOT_CONTENT')),
+        reason: 'Dartログが先、native snapshotが後の順で結合されるべき',
+      );
+    });
+
+    test('本文相当のprobe文字列をcompose自体が新たに生成・混入させないこと'
+        '（privacy除外の責務はformatEvent/isForbiddenKey側にあり、composeは'
+        '結合のみを行う純粋関数であることの回帰テスト）', () {
+      const probe = 'PERSISTENT_OBS_SECRET_9f3a2';
+      final result = DebugLogger.composeExportContent(
+        dartLogContent: 'no secret in dart log',
+        nativeSnapshot: 'no secret in native snapshot',
+      );
+
+      expect(result, isNot(contains(probe)));
+    });
+  });
+
+  group(
+      'DebugLogger.fetchNativeShareObservabilitySnapshot '
+      '(Persistent Share Observability Phase 1、実経路: MethodChannelをmock)',
+      () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const channel =
+        MethodChannel('com.example.readaloud_app/native_share_observability');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+    tearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+
+    test('native側が正常応答した場合はその文字列をそのまま返す', () async {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'getNativeShareLogSnapshot') {
+          return 'event=activity_lifecycle stage=on_create_enter seq=1';
+        }
+        return null;
+      });
+
+      final result =
+          await DebugLogger.instance.fetchNativeShareObservabilitySnapshot();
+
+      expect(result, 'event=activity_lifecycle stage=on_create_enter seq=1');
+    });
+
+    test('PlatformException時はnullを返す（graceful degradation。既存exportを'
+        '失敗させないため）', () async {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        throw PlatformException(code: 'UNAVAILABLE');
+      });
+
+      final result =
+          await DebugLogger.instance.fetchNativeShareObservabilitySnapshot();
+
+      expect(result, isNull);
+    });
+
+    test('handler未登録(MissingPluginException相当)でもnullを返す', () async {
+      // handlerを何も登録しない状態でinvokeMethod()を呼ぶと
+      // MissingPluginExceptionが投げられる。
+      final result =
+          await DebugLogger.instance.fetchNativeShareObservabilitySnapshot();
+
+      expect(result, isNull);
+    });
+
+    test('nativeが応答を返さない場合、timeout後にnullを返す（既存「ログ出力」が'
+        'hangしないため。ChatGPT precommit review v2 Fix 1）', () async {
+      // 意図的に完了しないFutureを返すhandler（native側がresult.success/error
+      // を一切呼ばないケースを模擬する）。
+      final blocker = Completer<String?>();
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        return blocker.future;
+      });
+
+      // このtest自体が実装のバグで無期限waitしないよう、外側にも安全弁の
+      // timeoutを付ける（production timeoutが機能していれば5秒以内に完了する）。
+      final result = await DebugLogger.instance
+          .fetchNativeShareObservabilitySnapshot(
+            timeout: const Duration(milliseconds: 50),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      expect(result, isNull);
     });
   });
 }
