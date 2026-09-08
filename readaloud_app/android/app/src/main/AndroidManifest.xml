@@ -30,16 +30,34 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+        </activity>
+        <!-- No.94 Share Event Architecture (Architecture Z):
+             ACTION_SEND(text/plain)/ACTION_PROCESS_TEXT(text/plain)の
+             唯一の外部ingress。plain Activity(FlutterActivityを継承しない)
+             であり、FlutterEngineへは一切attachしない。capture後は
+             MainActivityを明示的に前面化し、自身は即finish()する。
+             noHistory/excludeFromRecentsはfreshness proofの根拠ではなく
+             UX/back-stack hygiene(Recents非露出・UI flash防止)として
+             使う(詳細はExternalInputEntryActivity.ktのclass doc参照)。
+             taskAffinityはMainActivityと同じ空文字にし、MainActivityの
+             singleTask taskとaffinityベースで誤って合流しないようにする。 -->
+        <activity
+            android:name=".ExternalInputEntryActivity"
+            android:exported="true"
+            android:launchMode="standard"
+            android:taskAffinity=""
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.SEND"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="text/plain"/>
             </intent-filter>
             <!-- 選択テキスト→ReadAloud MVP: Android標準のテキスト選択メニューに
-                 ReadAloudを候補として表示するためのintent-filter。ACTION_SENDとは
-                 別のintent-filterのため、既存のACTION_SEND処理には影響しない。
-                 選択テキストはEXTRA_PROCESS_TEXT(CharSequence)経由でMainActivity.kt
-                 が受け取り、Dart側(ProcessTextHandler)へ橋渡しする。 -->
+                 ReadAloudを候補として表示するためのintent-filter。選択テキストは
+                 EXTRA_PROCESS_TEXT(CharSequence)経由でExternalInputEntryActivity.kt
+                 が受け取る。 -->
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT"/>
                 <category android:name="android.intent.category.DEFAULT"/>

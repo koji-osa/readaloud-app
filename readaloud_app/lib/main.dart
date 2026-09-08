@@ -16,8 +16,7 @@ import 'repository/tts/device_tts_service.dart';
 import 'providers.dart';
 import 'model/setting.dart';
 import 'util/share_intent_handler.dart';
-import 'util/process_text_handler.dart';
-import 'util/action_send_handler.dart';
+import 'util/external_input_handler.dart';
 import 'util/debug_logger.dart';
 import 'util/quick_listen_route_tracker.dart';
 import 'util/share_fingerprint.dart';
@@ -106,8 +105,7 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
   bool _isLoading = true;
   bool _onboardingCompleted = false;
   late ShareIntentHandler _shareIntentHandler;
-  late ProcessTextHandler _processTextHandler;
-  late ActionSendHandler _actionSendHandler;
+  late ExternalInputHandler _externalInputHandler;
   final QuickListenRouteTracker _quickListenRouteTracker =
       QuickListenRouteTracker();
 
@@ -154,64 +152,37 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
     _shareIntentHandler = ShareIntentHandler(
       onPayloadReceived: _handleSharedPayload,
     );
-    // No.94 ACTION_SEND delivery race fix: Androidのtext/plain ACTION_SENDは
-    // ActionSendHandler（native側の通知+単一消費pull bridge。詳細は
-    // util/action_send_handler.dartおよびandroid/.../MainActivity.kt参照）を
-    // 唯一の配信経路とする。flutter_sharing_intentのDart側stream
-    // (getMediaStream())をAndroidでも起動したままにすると、同一
-    // ACTION_SENDが「stream経由(eventSinkSharing登録済みの場合)」と
-    // 「ActionSendHandler経由」の両方から二重にonPayloadReceivedへ届く
-    // riskがある（AndroidManifestはACTION_SEND(text/plain)しかこのpluginへ
-    // 渡していないため、Androidでstreamを止めても他の共有機能は失われない）。
-    // 非Android platformは従来どおりflutter_sharing_intentが唯一の
-    // 共有経路であり、この変更の影響を受けない。
+    // No.94 Share Event Architecture (Architecture Z): Androidの
+    // text/plain ACTION_SEND / ACTION_PROCESS_TEXTはいずれも
+    // ExternalInputHandler（native側ExternalInputEntryActivity +
+    // 統合pending bridge。詳細はutil/external_input_handler.dartおよび
+    // android/.../ExternalInputEntryActivity.kt参照）を唯一の配信経路
+    // とする。flutter_sharing_intentのDart側stream(getMediaStream())を
+    // Androidでも起動したままにすると、二重配信riskがある
+    // （AndroidManifestはACTION_SEND/ACTION_PROCESS_TEXTのいずれも
+    // MainActivityへは渡していないため、Androidでstreamを止めても
+    // 他の共有機能は失われない）。非Android platformは従来どおり
+    // flutter_sharing_intentが唯一の共有経路であり、この変更の影響を
+    // 受けない。
     if (!Platform.isAndroid) {
       _shareIntentHandler.startListening();
     }
-    // 選択テキスト→ReadAloud MVP: ACTION_PROCESS_TEXT経路。既存の
-    // _handleSharedPayload()をそのまま再利用する（Quick Listen機構の複製なし）。
-    _processTextHandler = ProcessTextHandler(
+    _externalInputHandler = ExternalInputHandler(
       onPayloadReceived: _handleSharedPayload,
     );
-    _processTextHandler.startListening();
-    // No.94 ACTION_SEND delivery race fix。非Android platformではnative側に
-    // 対応する実装が存在しないため、この通知handlerが呼ばれることはない
-    // （ProcessTextHandlerと同じく無害）。
-    _actionSendHandler = ActionSendHandler(
-      onPayloadReceived: _handleSharedPayload,
-    );
-    _actionSendHandler.startListening();
+    _externalInputHandler.startListening();
   }
 
   Future<void> _checkInitialShareIntent() async {
-    // 選択テキスト→ReadAloud MVP: No.94で判明したflutter_sharing_intent側の
-    // stale initial payloadのrisk（プラグイン内部のinitialSharing/latestSharing
-    // が、無関係な過去のACTION_SEND由来のまま残り得る）を踏まえ、現在の
-    // Android Intentが実際にACTION_PROCESS_TEXTだった場合にそちらを優先
-    // させるため、ProcessTextHandler側を先に確認する。
-    //
-    // pullInitialProcessText()はQuick Listenを開く処理まで内部で完結させる
-    // （ProcessTextHandler.drainPendingProcessText()参照）ため、ここでは
-    // 戻り値をそのまま_handleSharedPayload()へ渡す必要はない。
-    //
-    // 【重要】戻り値がfalseでも、hasDeliveredProcessTextがtrueなら
-    // 「現在の起動はPROCESS_TEXTによるものだったが、native→Dart通知経由で
-    // 既に処理済み」という意味であり、その場合もShareIntentHandler側へは
-    // フォールスルーしない（stale ACTION_SEND initial payloadを優先させない
-    // ため。詳細はProcessTextHandlerのdocコメント「arbitration」参照）。
-    final pulledNow = await _processTextHandler.pullInitialProcessText();
-    if (pulledNow || _processTextHandler.hasDeliveredProcessText) {
-      return;
-    }
-
-    // No.94 ACTION_SEND delivery race fix: AndroidではACTION_SEND(text/plain)
-    // をActionSendHandler経由でのみ取得し、flutter_sharing_intentの
-    // getInitialSharing()は呼ばない（結果に関わらずreturnする）。plugin
-    // native側は依然として内部でACTION_SENDを処理し得るため、ここで
-    // フォールスルーしてしまうと同一共有が二重にQuick Listen/AddScreenへ
-    // 渡るriskがある（Section 11: 配信経路の一意性を優先する設計）。
+    // No.94 Share Event Architecture (Architecture Z): AndroidではACTION_SEND/
+    // ACTION_PROCESS_TEXTいずれもExternalInputHandler経由でのみ取得し、
+    // flutter_sharing_intentのgetInitialSharing()は呼ばない（結果に
+    // 関わらずreturnする）。ExternalInputEntryActivityが両方の唯一の
+    // ingressであるため、旧ProcessTextHandler/ActionSendHandler間の
+    // arbitration（hasDeliveredProcessTextベースのfall-through回避）は
+    // 単一handlerへの統合により構造的に不要化した。
     if (Platform.isAndroid) {
-      await _actionSendHandler.pullInitialActionSend();
+      await _externalInputHandler.pullInitialExternalInput();
       return;
     }
 
@@ -310,8 +281,7 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
     WidgetsBinding.instance.removeObserver(this);
     unawaited(DebugLogger.instance.logEvent('app_entry_point_disposed', {}));
     _shareIntentHandler.dispose();
-    _processTextHandler.dispose();
-    _actionSendHandler.dispose();
+    _externalInputHandler.dispose();
     super.dispose();
   }
 
