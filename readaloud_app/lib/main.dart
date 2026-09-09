@@ -21,7 +21,7 @@ import 'util/debug_logger.dart';
 import 'util/quick_listen_route_tracker.dart';
 import 'util/share_fingerprint.dart';
 
-const String kAppVersion = '1.2.20+41';
+const String kAppVersion = '1.2.21+42';
 
 // No.94 Observability: ビルド時に`--dart-define=BUILD_COMMIT=<git sha>`で
 // 埋め込む。未指定のbuildではbuildCommit=unknownとなる（既存buildを壊さない
