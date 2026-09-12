@@ -8,8 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/home/home_screen.dart';
 import 'ui/add/add_screen.dart';
-import 'ui/player/player_screen.dart';
-import 'ui/quick_listen/quick_listen_screen.dart' show quickListenViewModelProvider;
+import 'ui/quick_listen/quick_listen_screen.dart'
+    show quickListenViewModelProvider;
 import 'repository/settings_repository.dart';
 import 'repository/impl/settings_repository_impl.dart';
 import 'repository/tts/device_tts_service.dart';
@@ -43,7 +43,6 @@ void main() async {
     ),
   );
 
-
   await AudioService.androidForceEnableMediaButtons();
 
   // FIX-021調査用ログ初期化
@@ -55,7 +54,8 @@ void main() async {
     'versionName': versionParts.first,
     'versionCode': versionParts.length > 1 ? versionParts[1] : 'unknown',
     'buildCommit': kBuildCommit,
-    'buildMode': kReleaseMode ? 'release' : (kProfileMode ? 'profile' : 'debug'),
+    'buildMode':
+        kReleaseMode ? 'release' : (kProfileMode ? 'profile' : 'debug'),
   }));
   unawaited(DebugLogger.instance.logEvent('app_entry_init', {
     'buildCommit': kBuildCommit,
@@ -125,8 +125,8 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
       // マーカー（No.94診断用、Observability only）。
       if (_firstPostFrameLogged) return;
       _firstPostFrameLogged = true;
-      unawaited(
-          DebugLogger.instance.logEvent('app_entry_point_first_post_frame', {}));
+      unawaited(DebugLogger.instance
+          .logEvent('app_entry_point_first_post_frame', {}));
     });
     _checkOnboarding();
     _initShareIntent();
@@ -210,19 +210,36 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
     // 追跡できるようにする。
     final flowId = payload.flowId;
 
+    // v0.4.1 D8 step 2: 最初のawaitより前に同期的にPlayerをretiringにし、
+    // playback gate経由でTTS停止・usage flush・位置保存を試行する
+    // （never throws。stop完了より前にNormal Player routeを除去しない）。
+    final tracker = ref.read(normalPlayerSessionTrackerProvider);
+    unawaited(DebugLogger.instance
+        .logEvent('player_stop_requested', {'flowId': flowId}));
+    final ticket = await tracker.prepareForRemoval(flowId: flowId);
+    unawaited(DebugLogger.instance
+        .logEvent('player_stop_completed', {'flowId': flowId}));
+
     try {
+      // v0.4.1 D8 step 4 / B-01 closure: 該当Playerが存在し、かつTTS-stopの
+      // 成功が確認できない場合は、Normal Player routeを除去せず covering
+      // routeもpushせずにreturnする。accounting/position-save失敗だけなら
+      // ここには引っかからない（ticket.stopOutcome.ttsStopConfirmed）。
+      if (ticket.representsCurrentPlayer &&
+          !ticket.stopOutcome.ttsStopConfirmed) {
+        unawaited(DebugLogger.instance.logEvent('error', {
+          'context': 'handle_shared_payload_tts_stop_unconfirmed',
+          'flowId': flowId,
+        }));
+        return;
+      }
+
       // 通常Content再生・Quick Listen再生のいずれかが裏で継続していると、
       // 単一のTtsAudioHandlerを取り合って状態汚染やTTS使用量の二重カウントに
       // つながるため、新しい共有を処理する前に両方とも明示的に停止しておく。
       // ログ自体は純粋なObservabilityで、DebugLoggerのseq採番＋write queueが
       // 呼び出し順を保証するため、ファイルI/O完了はawaitせず共有→Navigationの
-      // タイミングに影響させない。stop()/close()本体は従来通りawaitする。
-      unawaited(DebugLogger.instance
-          .logEvent('player_stop_requested', {'flowId': flowId}));
-      await ref.read(playerViewModelProvider.notifier).stop();
-      unawaited(DebugLogger.instance
-          .logEvent('player_stop_completed', {'flowId': flowId}));
-
+      // タイミングに影響させない。close()本体は従来通りawaitする。
       unawaited(DebugLogger.instance
           .logEvent('quick_listen_close_requested', {'flowId': flowId}));
       await ref.read(quickListenViewModelProvider.notifier).close();
@@ -245,6 +262,12 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
         context: context,
         flowId: flowId,
       );
+
+      // v0.4.1: Normal Player route除去の権威ある唯一の場所。
+      // ここから次のcovering route pushまでの間にawaitを置かない
+      // （NRR-08 / zero-await guarantee。Home早期loadContents()と
+      // rapid-share latest-event semanticsを守るため）。
+      tracker.removeActivePlayerNow(ticket, context: context);
 
       if (payload.kind == SharedContentKind.url) {
         unawaited(DebugLogger.instance.logEvent('navigation_push_requested', {
@@ -273,6 +296,11 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
         'errorType': e.runtimeType.toString(),
       }));
       rethrow;
+    } finally {
+      // v0.4.1 D8 step 11: 同期・冪等・identity-safe。自flowのclaimだけを
+      // 外す。他のclaimが残っている限りeffect-activeへは戻さない。
+      // 除去成功後・別sessionが既に登録済みの場合はno-op。
+      tracker.abandonRemoval(ticket);
     }
   }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../model/content.dart';
+import '../model/normal_player_session.dart';
 import '../model/playback_state.dart';
 import '../model/bookmark.dart';
 import '../repository/playback_repository.dart';
@@ -9,9 +10,6 @@ import '../repository/settings_repository.dart';
 import '../model/setting.dart';
 import '../model/tts_playback_position.dart';
 import '../repository/tts/tts_service.dart';
-import '../repository/tts/device_tts_service.dart';
-import '../usecase/playback/start_playback_usecase.dart';
-import '../usecase/playback/stop_playback_usecase.dart';
 import '../usecase/playback/save_playback_state_usecase.dart';
 import '../usecase/playback/set_ab_repeat_usecase.dart';
 import '../usecase/bookmark/add_bookmark_usecase.dart';
@@ -22,6 +20,7 @@ import '../repository/gemini_service.dart'; // REQ-034
 import '../repository/claude_service.dart'; // REQ-034
 import '../repository/groq_service.dart'; // REQ-034
 import '../usecase/tts/check_tts_limit_usecase.dart';
+import '../util/normal_player_session_tracker.dart';
 import '../util/table_debug_logger.dart'; // FIX-056
 import '../util/debug_logger.dart';
 
@@ -80,9 +79,13 @@ class PlayerState {
       );
 }
 
+/// Normal Player の ViewModel。
+///
+/// v0.4.1: すべての public async mutation は [PlayerOriginToken] を必須引数で
+/// 受け取り、実行の直前・await 後の各 effect boundary で origin の
+/// currentness を検証する（D9）。origin に既定値は無く、VM 内部の mutable な
+/// 紐付け（[_attachedSessionId]）を origin の代用にはしない（NRR-12）。
 class PlayerViewModel extends StateNotifier<PlayerState> {
-  final StartPlaybackUseCase _startPlayback;
-  final StopPlaybackUseCase _stopPlayback;
   final SavePlaybackStateUseCase _savePlaybackState;
   final SetAbRepeatUseCase _setAbRepeat;
   final AddBookmarkUseCase _addBookmark;
@@ -91,17 +94,38 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final SaveContentUseCase _saveContent; // REQ-034
   // ignore: unused_field
   final CheckTtsLimitUseCase _checkTtsLimit;
-  final TtsAudioHandler _audioHandler;
+  // TtsAudioHandler（具象クラス）ではなく position stream / 現在位置取得関数を
+  // 直接受け取る。QuickListenViewModel の positionStream / getCurrentPosition
+  // 注入と同じ方式にすることで、audio_service の重量な具象クラスをテストで
+  // fakeする必要が無くなる（テスト容易性）。
+  final Stream<dynamic> _positionStream;
+  final int Function() _getCurrentPosition;
   final PlaybackRepository _playbackRepo;
   final SettingsRepository _settingsRepo;
   final BookmarkRepository _bookmarkRepo;
+  final NormalPlayerPlaybackGate _playbackGate;
+
+  /// tracker.isEffectCurrent を束縛した述語。VM は tracker クラスを直接
+  /// import しない（層分離・テスト容易性のため注入で受け取る）。
+  final bool Function(String sessionId) _isEffectCurrent;
 
   StreamSubscription<dynamic>? _playbackStateSubscription;
   bool _hasReceivedPosition = false;
 
+  /// ② VM↔session の現在の紐付け（mutable）。origin-bound な判定の代用には
+  /// しない。ambient write（position stream）と attach 整合性の二次検査にのみ
+  /// 使う（D1/D9）。
+  String? _attachedSessionId;
+
+  // v0.4.1 D15 position-stream gating: このsessionの再生開始
+  // （isPlaying:true）を確認するまでは、customStateの再送/stale値を
+  // UI stateへ反映しない（Quick Listenの既存実証済みパターンと同型）。
+  bool _hasCalledPlayForCurrentSession = false;
+  bool _acceptPositionUpdates = false;
+
   PlayerViewModel({
-    required StartPlaybackUseCase startPlayback,
-    required StopPlaybackUseCase stopPlayback,
+    required NormalPlayerPlaybackGate playbackGate,
+    required bool Function(String sessionId) isEffectCurrent,
     required SavePlaybackStateUseCase savePlaybackState,
     required SetAbRepeatUseCase setAbRepeat,
     required AddBookmarkUseCase addBookmark,
@@ -109,12 +133,13 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required UpdateContentUseCase updateContent,
     required SaveContentUseCase saveContent, // REQ-034
     required CheckTtsLimitUseCase checkTtsLimit,
-    required TtsAudioHandler audioHandler,
+    required Stream<dynamic> positionStream,
+    required int Function() getCurrentPosition,
     required PlaybackRepository playbackRepo,
     required SettingsRepository settingsRepo,
     required BookmarkRepository bookmarkRepo,
-  })  : _startPlayback = startPlayback,
-        _stopPlayback = stopPlayback,
+  })  : _playbackGate = playbackGate,
+        _isEffectCurrent = isEffectCurrent,
         _savePlaybackState = savePlaybackState,
         _setAbRepeat = setAbRepeat,
         _addBookmark = addBookmark,
@@ -122,7 +147,8 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _updateContent = updateContent,
         _saveContent = saveContent, // REQ-034
         _checkTtsLimit = checkTtsLimit,
-        _audioHandler = audioHandler,
+        _positionStream = positionStream,
+        _getCurrentPosition = getCurrentPosition,
         _playbackRepo = playbackRepo,
         _settingsRepo = settingsRepo,
         _bookmarkRepo = bookmarkRepo,
@@ -130,19 +156,74 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     _listenToStreams();
   }
 
+  /// 唯一の state 書込み口。disposed / superseded / re-owned のいずれでも
+  /// 例外を出さず false を返して縮退する（NRR-13）。origin に既定値は無い。
+  bool _write(
+    PlayerOriginToken origin,
+    PlayerState Function(PlayerState prev) update, {
+    required String stage,
+  }) {
+    if (!mounted) {
+      _diag(stage, origin, 'notifier_disposed');
+      return false;
+    }
+    if (!_isEffectCurrent(origin.sessionId)) {
+      _diag(stage, origin, 'session_not_effect_current');
+      return false;
+    }
+    if (_attachedSessionId != origin.sessionId) {
+      _diag(stage, origin, 'vm_reowned');
+      return false;
+    }
+    state = update(state);
+    return true;
+  }
+
+  /// origin-bound な副作用（DB write 等）を開始してよいかの同期判定。
+  /// await を跨いだ後に書込み先を再導出しないため、DB 呼び出しの前に必ずこれで
+  /// guard する（`_write` は state 反映時の二次防御）。
+  bool _isOriginEffectCurrent(PlayerOriginToken origin) =>
+      _isEffectCurrent(origin.sessionId) &&
+      _attachedSessionId == origin.sessionId;
+
+  void _diag(String stage, PlayerOriginToken origin, String reason) {
+    unawaited(DebugLogger.instance.logEvent('player_effect_discarded', {
+      'sessionId': origin.sessionId,
+      'stage': stage,
+      'reason': reason,
+    }));
+  }
+
   void _listenToStreams() {
-    _playbackStateSubscription = _audioHandler.customState.listen((data) {
+    _playbackStateSubscription = _positionStream.listen((data) {
       if (data is! TtsPlaybackPosition) return;
       final isFirstEvent = !_hasReceivedPosition;
       _hasReceivedPosition = true;
+
+      // v0.4.1 D15: このsession自身の再生開始（isPlaying:true）を確認する
+      // までは適用しない。A→Bのhandoff直後にAのstale positionが届いても
+      // Bのstate/usageを汚染しない。
+      if (!_acceptPositionUpdates &&
+          _hasCalledPlayForCurrentSession &&
+          data.isPlaying) {
+        _acceptPositionUpdates = true;
+      }
+      final attachedSessionId = _attachedSessionId;
+      final appliedToState = _acceptPositionUpdates &&
+          attachedSessionId != null &&
+          _isEffectCurrent(attachedSessionId);
+
       unawaited(DebugLogger.instance.logEvent('tts_position_received', {
         'origin': 'player',
-        'contentId': state.content?.id,
+        'sessionId': attachedSessionId,
         'charPosition': data.charPosition,
         'isPlaying': data.isPlaying,
         'ttsStatus': data.ttsStatus.name,
         'isFirstEvent': isFirstEvent,
+        'appliedToState': appliedToState,
       }));
+
+      if (!appliedToState || !mounted) return;
       final content = state.content;
       if (content == null || content.body.isEmpty) return;
 
@@ -162,9 +243,25 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     });
   }
 
-  Future<void> setContent(Content content) async {
-    _hasReceivedPosition = false; // Observability: 新contentの初回受信を判定し直す
-    state = state.copyWith(content: content, isLoading: true);
+  /// session attach 操作（D1/D10）。`copyWith` ではなく新規 [PlayerState] を
+  /// 構築することで、明示的に渡さないすべての field を既定値へ戻し、旧
+  /// session の残存 state（`tocCreating`/`tocCompleted`/bookmarks 等）を
+  /// 引き継がない。
+  Future<void> setContent({
+    required PlayerOriginToken origin,
+    required Content content,
+  }) async {
+    if (!mounted) return;
+    if (!_isEffectCurrent(origin.sessionId)) {
+      _diag('attach', origin, 'session_not_effect_current');
+      return;
+    }
+    _attachedSessionId = origin.sessionId;
+    _hasReceivedPosition = false;
+    _hasCalledPlayForCurrentSession = false;
+    _acceptPositionUpdates = false;
+    state = PlayerState(content: content, isLoading: true); // fresh構築（D10）
+
     try {
       final existingState = await _playbackRepo.getByContentId(content.id);
       final PlaybackState playbackState;
@@ -172,7 +269,8 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         playbackState = existingState;
       } else {
         // 初回: 設定画面のデフォルト速度を適用
-        final defaultSpeedStr = await _settingsRepo.get(SettingKeys.defaultSpeed) ?? '1.0';
+        final defaultSpeedStr =
+            await _settingsRepo.get(SettingKeys.defaultSpeed) ?? '1.0';
         final defaultSpeed = double.tryParse(defaultSpeedStr) ?? 1.0;
         playbackState = PlaybackState(
           contentId: content.id,
@@ -183,130 +281,176 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       }
       // DBからブックマークを読み込む（FIX-025）
       final bookmarks = await _bookmarkRepo.getByContentId(content.id);
-      state = state.copyWith(
-        content: content,
-        playbackState: playbackState,
-        highlightPosition: playbackState.position,
-        bookmarks: bookmarks,
-        isLoading: false,
+      _write(
+        origin,
+        (s) => s.copyWith(
+          content: content,
+          playbackState: playbackState,
+          highlightPosition: playbackState.position,
+          bookmarks: bookmarks,
+          isLoading: false,
+        ),
+        stage: 'attach_load',
       );
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: '再生状態の読み込みに失敗しました: $e',
+      _write(
+        origin,
+        (s) => s.copyWith(
+          isLoading: false,
+          errorMessage: '再生状態の読み込みに失敗しました: $e',
+        ),
+        stage: 'attach_load_error',
       );
     }
   }
 
-  Future<void> play() async {
-    if (state.content == null) return;
+  Future<void> play({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) {
+      _diag('play', origin, 'session_not_effect_current');
+      return;
+    }
+    if (state.content == null || state.content!.id != origin.contentId) return;
+    _hasCalledPlayForCurrentSession = true; // gate.start()より前（QLと同じタイミング）
     try {
-      await _startPlayback.execute(state.content!.id);
-      state = state.copyWith(isPlaying: true);
+      await _playbackGate.start(
+          sessionId: origin.sessionId, contentId: origin.contentId);
+      _write(origin, (s) => s.copyWith(isPlaying: true), stage: 'play');
     } catch (e) {
-      state = state.copyWith(errorMessage: '再生に失敗しました: $e');
+      _write(origin, (s) => s.copyWith(errorMessage: '再生に失敗しました: $e'),
+          stage: 'play_error');
     }
   }
 
-  Future<void> pause() async {
-    if (state.content == null) return;
-    // _audioHandler.currentPositionで精度の高い位置を取得（FIX-026）
-    await _stopPlayback.pause(
-      state.content!.id,
-      _audioHandler.currentPosition,
+  Future<void> pause({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
+    // _getCurrentPosition()で精度の高い位置を取得（FIX-026）
+    final outcome = await _playbackGate.pause(
+      sessionId: origin.sessionId,
+      contentId: origin.contentId,
+      position: _getCurrentPosition(),
     );
-    state = state.copyWith(isPlaying: false);
+    _write(
+      origin,
+      (s) => outcome.ttsStopSucceeded
+          ? s.copyWith(isPlaying: false)
+          : s.copyWith(isPlaying: false, errorMessage: '一時停止に失敗しました'),
+      stage: 'pause',
+    );
   }
 
-  Future<void> stop() async {
-    if (state.content == null) return;
-    // _audioHandler.currentPositionで精度の高い位置を取得（FIX-026）
-    await _stopPlayback.execute(
-      state.content!.id,
-      _audioHandler.currentPosition,
+  Future<void> stop({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
+    // _getCurrentPosition()で精度の高い位置を取得（FIX-026）
+    final outcome = await _playbackGate.stopForSession(
+      sessionId: origin.sessionId,
+      contentId: origin.contentId,
+      position: _getCurrentPosition(),
     );
-    state = state.copyWith(isPlaying: false);
+    _write(
+      origin,
+      (s) => outcome.ttsStopSucceeded
+          ? s.copyWith(isPlaying: false)
+          : s.copyWith(isPlaying: false, errorMessage: '停止に失敗しました'),
+      stage: 'stop',
+    );
   }
 
-  Future<void> seekToStart() async {
-    if (state.content == null) return;
+  Future<void> seekToStart({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     final wasPlaying = state.isPlaying;
-    state = state.copyWith(isLoading: true);
+    _write(origin, (s) => s.copyWith(isLoading: true), stage: 'seek_to_start');
     try {
       if (wasPlaying) {
-        await _stopPlayback.execute(
-          state.content!.id,
-          state.highlightPosition,
+        await _playbackGate.stopForSession(
+          sessionId: origin.sessionId,
+          contentId: origin.contentId,
+          position: state.highlightPosition,
         );
       }
+      if (!_isOriginEffectCurrent(origin)) return;
       await _savePlaybackState.execute(
-        contentId: state.content!.id,
+        contentId: origin.contentId,
         position: 0,
         progressPct: 0.0,
       );
-      state = state.copyWith(
-        highlightPosition: 0,
-        playbackState: state.playbackState?.copyWith(
-          position: 0,
-          progressPct: 0.0,
+      _write(
+        origin,
+        (s) => s.copyWith(
+          highlightPosition: 0,
+          playbackState:
+              s.playbackState?.copyWith(position: 0, progressPct: 0.0),
+          isPlaying: false,
+          isLoading: false,
         ),
-        isPlaying: false,
-        isLoading: false,
+        stage: 'seek_to_start_complete',
       );
-      if (wasPlaying) await play();
+      if (wasPlaying) await play(origin: origin);
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: '先頭への移動に失敗しました: $e',
+      _write(
+        origin,
+        (s) => s.copyWith(isLoading: false, errorMessage: '先頭への移動に失敗しました: $e'),
+        stage: 'seek_to_start_error',
       );
     }
   }
 
-  Future<void> seekToEnd() async {
-    if (state.content == null) return;
+  Future<void> seekToEnd({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     final wasPlaying = state.isPlaying;
-    state = state.copyWith(isLoading: true);
+    _write(origin, (s) => s.copyWith(isLoading: true), stage: 'seek_to_end');
     try {
       if (wasPlaying) {
-        await _stopPlayback.execute(
-          state.content!.id,
-          state.highlightPosition,
+        await _playbackGate.stopForSession(
+          sessionId: origin.sessionId,
+          contentId: origin.contentId,
+          position: state.highlightPosition,
         );
       }
-      final endPosition = state.content!.body.length;
+      if (!_isOriginEffectCurrent(origin)) return;
+      final endPosition = state.content?.body.length ?? 0;
       await _savePlaybackState.execute(
-        contentId: state.content!.id,
+        contentId: origin.contentId,
         position: endPosition,
         progressPct: 100.0,
       );
-      state = state.copyWith(
-        highlightPosition: endPosition,
-        playbackState: state.playbackState?.copyWith(
-          position: endPosition,
-          progressPct: 100.0,
+      _write(
+        origin,
+        (s) => s.copyWith(
+          highlightPosition: endPosition,
+          playbackState: s.playbackState
+              ?.copyWith(position: endPosition, progressPct: 100.0),
+          isPlaying: false,
+          isLoading: false,
         ),
-        isPlaying: false,
-        isLoading: false,
+        stage: 'seek_to_end_complete',
       );
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: '末尾への移動に失敗しました: $e',
+      _write(
+        origin,
+        (s) => s.copyWith(isLoading: false, errorMessage: '末尾への移動に失敗しました: $e'),
+        stage: 'seek_to_end_error',
       );
     }
   }
 
-  Future<void> rewind() async {
-    if (state.content == null) return;
+  Future<void> rewind({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     final wasPlaying = state.isPlaying;
-    state = state.copyWith(isLoading: true);
+    _write(origin, (s) => s.copyWith(isLoading: true), stage: 'rewind');
     try {
       if (wasPlaying) {
-        await _stopPlayback.execute(
-          state.content!.id,
-          state.highlightPosition,
+        await _playbackGate.stopForSession(
+          sessionId: origin.sessionId,
+          contentId: origin.contentId,
+          position: state.highlightPosition,
         );
       }
+      if (!_isOriginEffectCurrent(origin) || state.content == null) return;
       final speed = state.playbackState?.speed ?? 1.0;
       final charsPerSecond = (5 * speed).round();
       final rewindChars = 10 * charsPerSecond;
@@ -315,39 +459,45 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       final progressPct =
           (newPosition / state.content!.body.length * 100).clamp(0.0, 100.0);
       await _savePlaybackState.execute(
-        contentId: state.content!.id,
+        contentId: origin.contentId,
         position: newPosition,
         progressPct: progressPct,
       );
-      state = state.copyWith(
-        highlightPosition: newPosition,
-        playbackState: state.playbackState?.copyWith(
-          position: newPosition,
-          progressPct: progressPct,
+      _write(
+        origin,
+        (s) => s.copyWith(
+          highlightPosition: newPosition,
+          playbackState: s.playbackState
+              ?.copyWith(position: newPosition, progressPct: progressPct),
+          isPlaying: false,
+          isLoading: false,
         ),
-        isPlaying: false,
-        isLoading: false,
+        stage: 'rewind_complete',
       );
-      if (wasPlaying) await play();
+      if (wasPlaying) await play(origin: origin);
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: '巻き戻しに失敗しました: $e',
+      _write(
+        origin,
+        (s) => s.copyWith(isLoading: false, errorMessage: '巻き戻しに失敗しました: $e'),
+        stage: 'rewind_error',
       );
     }
   }
 
-  Future<void> fastForward() async {
-    if (state.content == null) return;
+  Future<void> fastForward({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     final wasPlaying = state.isPlaying;
-    state = state.copyWith(isLoading: true);
+    _write(origin, (s) => s.copyWith(isLoading: true), stage: 'fast_forward');
     try {
       if (wasPlaying) {
-        await _stopPlayback.execute(
-          state.content!.id,
-          state.highlightPosition,
+        await _playbackGate.stopForSession(
+          sessionId: origin.sessionId,
+          contentId: origin.contentId,
+          position: state.highlightPosition,
         );
       }
+      if (!_isOriginEffectCurrent(origin) || state.content == null) return;
       final speed = state.playbackState?.speed ?? 1.0;
       final charsPerSecond = (5 * speed).round();
       final forwardChars = 10 * charsPerSecond;
@@ -356,101 +506,127 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       final progressPct =
           (newPosition / state.content!.body.length * 100).clamp(0.0, 100.0);
       await _savePlaybackState.execute(
-        contentId: state.content!.id,
+        contentId: origin.contentId,
         position: newPosition,
         progressPct: progressPct,
       );
-      state = state.copyWith(
-        highlightPosition: newPosition,
-        playbackState: state.playbackState?.copyWith(
-          position: newPosition,
-          progressPct: progressPct,
+      _write(
+        origin,
+        (s) => s.copyWith(
+          highlightPosition: newPosition,
+          playbackState: s.playbackState
+              ?.copyWith(position: newPosition, progressPct: progressPct),
+          isPlaying: false,
+          isLoading: false,
         ),
-        isPlaying: false,
-        isLoading: false,
+        stage: 'fast_forward_complete',
       );
-      if (wasPlaying) await play();
+      if (wasPlaying) await play(origin: origin);
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: '早送りに失敗しました: $e',
+      _write(
+        origin,
+        (s) => s.copyWith(isLoading: false, errorMessage: '早送りに失敗しました: $e'),
+        stage: 'fast_forward_error',
       );
     }
   }
 
-  Future<void> changeSpeed(double speed) async {
-    if (state.content == null) return;
+  Future<void> changeSpeed(
+      {required PlayerOriginToken origin, required double speed}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     final wasPlaying = state.isPlaying;
-    state = state.copyWith(isLoading: true);
+    _write(origin, (s) => s.copyWith(isLoading: true), stage: 'change_speed');
     try {
       if (wasPlaying) {
-        // _audioHandler.currentPositionで精度の高い位置を取得（FIX-026）
-        await _stopPlayback.execute(
-          state.content!.id,
-          _audioHandler.currentPosition,
+        // _getCurrentPosition()で精度の高い位置を取得（FIX-026）
+        await _playbackGate.stopForSession(
+          sessionId: origin.sessionId,
+          contentId: origin.contentId,
+          position: _getCurrentPosition(),
         );
       }
+      if (!_isOriginEffectCurrent(origin)) return;
       await _savePlaybackState.execute(
-        contentId: state.content!.id,
-        position: _audioHandler.currentPosition,
+        contentId: origin.contentId,
+        position: _getCurrentPosition(),
         progressPct: state.playbackState?.progressPct ?? 0.0,
         speed: speed,
       );
-      state = state.copyWith(
-        playbackState: state.playbackState?.copyWith(speed: speed),
-        isPlaying: false,
-        isLoading: false,
+      _write(
+        origin,
+        (s) => s.copyWith(
+          playbackState: s.playbackState?.copyWith(speed: speed),
+          isPlaying: false,
+          isLoading: false,
+        ),
+        stage: 'change_speed_complete',
       );
-      if (wasPlaying) await play();
+      if (wasPlaying) await play(origin: origin);
     } catch (e) {
-      state = state.copyWith(
-        isLoading: false,
-        errorMessage: '速度変更に失敗しました: $e',
+      _write(
+        origin,
+        (s) => s.copyWith(isLoading: false, errorMessage: '速度変更に失敗しました: $e'),
+        stage: 'change_speed_error',
       );
     }
   }
 
-  Future<void> changePitch(double pitch) async {
-    if (state.content == null) return;
+  Future<void> changePitch(
+      {required PlayerOriginToken origin, required double pitch}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     await _savePlaybackState.execute(
-      contentId: state.content!.id,
+      contentId: origin.contentId,
       position: state.highlightPosition,
       progressPct: state.playbackState?.progressPct ?? 0.0,
       pitch: pitch,
     );
-    state = state.copyWith(
-      playbackState: state.playbackState?.copyWith(pitch: pitch),
-    );
+    _write(
+        origin,
+        (s) =>
+            s.copyWith(playbackState: s.playbackState?.copyWith(pitch: pitch)),
+        stage: 'change_pitch');
   }
 
-  Future<void> changeVolume(double volume) async {
-    if (state.content == null) return;
+  Future<void> changeVolume(
+      {required PlayerOriginToken origin, required double volume}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     await _savePlaybackState.execute(
-      contentId: state.content!.id,
+      contentId: origin.contentId,
       position: state.highlightPosition,
       progressPct: state.playbackState?.progressPct ?? 0.0,
       volume: volume,
     );
-    state = state.copyWith(
-      playbackState: state.playbackState?.copyWith(volume: volume),
-    );
+    _write(
+        origin,
+        (s) => s.copyWith(
+            playbackState: s.playbackState?.copyWith(volume: volume)),
+        stage: 'change_volume');
   }
 
-  Future<void> changeVoice(String voiceId) async {
-    if (state.content == null) return;
+  Future<void> changeVoice(
+      {required PlayerOriginToken origin, required String voiceId}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     await _savePlaybackState.execute(
-      contentId: state.content!.id,
+      contentId: origin.contentId,
       position: state.highlightPosition,
       progressPct: state.playbackState?.progressPct ?? 0.0,
       voiceId: voiceId,
     );
-    state = state.copyWith(
-      playbackState: state.playbackState?.copyWith(voiceId: voiceId),
-    );
+    _write(
+        origin,
+        (s) => s.copyWith(
+            playbackState: s.playbackState?.copyWith(voiceId: voiceId)),
+        stage: 'change_voice');
   }
 
-  Future<void> addBookmark(String? label) async {
-    if (state.content == null) return;
+  Future<void> addBookmark(
+      {required PlayerOriginToken origin, String? label}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     try {
       // FIX-063: 前の句読点直後をpositionにする
       final body = state.content!.body;
@@ -463,36 +639,40 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       }
       final adjustedPos = prevBreak;
       final bookmark = await _addBookmark.execute(
-        contentId: state.content!.id,
+        contentId: origin.contentId,
         position: adjustedPos, // FIX-063
         label: label,
       );
-      state = state.copyWith(
-        bookmarks: [...state.bookmarks, bookmark],
-      );
+      _write(origin, (s) => s.copyWith(bookmarks: [...s.bookmarks, bookmark]),
+          stage: 'add_bookmark');
     } catch (e) {
-      state = state.copyWith(errorMessage: 'ブックマークの追加に失敗しました: $e');
+      _write(origin, (s) => s.copyWith(errorMessage: 'ブックマークの追加に失敗しました: $e'),
+          stage: 'add_bookmark_error');
     }
   }
 
   /// 表解説テキストを本文に追記（FIX-049）
   Future<void> appendTableDescription({
+    required PlayerOriginToken origin,
     required int insertPosition,
     required String description,
     int index = 0, // FIX-056
     int startPosition = 0, // FIX-062
   }) async {
-    if (state.content == null) return;
-    TableDebugLogger.instance.logInsert( // FIX-056
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
+    // await前の同期スナップショット（origin検証直後・await境界の前なので安全）。
+    final currentBody = state.content!.body;
+    TableDebugLogger.instance.logInsert(
+      // FIX-056
       index: index, // FIX-056
       insertPosition: insertPosition, // FIX-056
-      bodyLengthBefore: state.content!.body.length, // FIX-056
+      bodyLengthBefore: currentBody.length, // FIX-056
     ); // FIX-056
     try {
-      final currentBody = state.content!.body;
       // REQ-036: 表解説テキストに番号付け
-      final numberedDescription = description.replaceFirst(
-          '表情報の解説：', '表${index}の解説：'); // REQ-036
+      final numberedDescription =
+          description.replaceFirst('表情報の解説：', '表${index}の解説：'); // REQ-036
       final numberedEnd = '以上、表${index}の解説終了。'; // REQ-036
       // ① endPosに解説を挿入（FIX-052・REQ-036）
       final bodyAfterDesc = currentBody.substring(0, insertPosition) +
@@ -504,103 +684,141 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
           tableStartText +
           bodyAfterDesc.substring(startPosition);
       await _updateContent.execute(
-        id: state.content!.id,
+        id: origin.contentId,
         body: newBody,
       );
-      state = state.copyWith(
-        content: state.content!.copyWith(body: newBody),
+      _write(
+        origin,
+        (s) => (s.content != null && s.content!.id == origin.contentId)
+            ? s.copyWith(content: s.content!.copyWith(body: newBody))
+            : s,
+        stage: 'w1_append_table_description',
       );
-      TableDebugLogger.instance.logInsertComplete( // FIX-056
+      TableDebugLogger.instance.logInsertComplete(
+        // FIX-056
         index: index, // FIX-056
         bodyLengthAfter: newBody.length, // FIX-056
       ); // FIX-056
     } catch (e) {
-      TableDebugLogger.instance.logInsertError( // FIX-056
+      TableDebugLogger.instance.logInsertError(
+        // FIX-056
         index: index, // FIX-056
         error: e.toString(), // FIX-056
       ); // FIX-056
-      state = state.copyWith(errorMessage: 'テキストの更新に失敗しました: $e');
+      _write(origin, (s) => s.copyWith(errorMessage: 'テキストの更新に失敗しました: $e'),
+          stage: 'w1_append_table_description_error');
     }
   }
 
   /// Gemini分析結果のブックマークを直接追加（REQ-011）
-  Future<void> addBookmarkDirect(Bookmark bookmark) async {
+  Future<void> addBookmarkDirect(
+      {required PlayerOriginToken origin, required Bookmark bookmark}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
     try {
       await _bookmarkRepo.save(bookmark);
-      state = state.copyWith(
-        bookmarks: [...state.bookmarks, bookmark],
-      );
+      _write(origin, (s) => s.copyWith(bookmarks: [...s.bookmarks, bookmark]),
+          stage: 'add_bookmark_direct');
     } catch (e) {
-      state = state.copyWith(errorMessage: 'ブックマークの追加に失敗しました: $e');
+      _write(origin, (s) => s.copyWith(errorMessage: 'ブックマークの追加に失敗しました: $e'),
+          stage: 'add_bookmark_direct_error');
     }
   }
 
-  Future<void> deleteBookmark(String bookmarkId) async {
+  Future<void> deleteBookmark(
+      {required PlayerOriginToken origin, required String bookmarkId}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
     try {
       await _deleteBookmark.execute(bookmarkId);
-      state = state.copyWith(
-        bookmarks: state.bookmarks.where((b) => b.id != bookmarkId).toList(),
+      _write(
+        origin,
+        (s) => s.copyWith(
+            bookmarks: s.bookmarks.where((b) => b.id != bookmarkId).toList()),
+        stage: 'delete_bookmark',
       );
     } catch (e) {
-      state = state.copyWith(errorMessage: 'ブックマークの削除に失敗しました: $e');
+      _write(origin, (s) => s.copyWith(errorMessage: 'ブックマークの削除に失敗しました: $e'),
+          stage: 'delete_bookmark_error');
     }
   }
 
-  Future<void> setAbRepeat(int start, int end) async {
-    if (state.content == null) return;
+  Future<void> setAbRepeat(
+      {required PlayerOriginToken origin,
+      required int start,
+      required int end}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
     await _setAbRepeat.execute(
-      contentId: state.content!.id,
-      start: start,
-      end: end,
-    );
+        contentId: origin.contentId, start: start, end: end);
   }
 
-  Future<void> clearAbRepeat() async {
-    if (state.content == null) return;
-    await _setAbRepeat.clear(state.content!.id);
+  Future<void> clearAbRepeat({required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
+    await _setAbRepeat.clear(origin.contentId);
   }
 
-  Future<void> seekToBookmark(int position) async {
-    if (state.content == null || state.content!.body.isEmpty) return;
+  Future<void> seekToBookmark(
+      {required PlayerOriginToken origin, required int position}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null ||
+        state.content!.body.isEmpty ||
+        state.content!.id != origin.contentId) {
+      return;
+    }
     final wasPlaying = state.isPlaying;
     // 再生中の場合は正しく停止（TTS使用量カウント含む）（FIX-003）
     if (wasPlaying) {
-      await _stopPlayback.execute(
-        state.content!.id,
-        _audioHandler.currentPosition,
+      final outcome = await _playbackGate.stopForSession(
+        sessionId: origin.sessionId,
+        contentId: origin.contentId,
+        position: _getCurrentPosition(),
       );
-      state = state.copyWith(isPlaying: false);
+      _write(
+        origin,
+        (s) => outcome.ttsStopSucceeded
+            ? s.copyWith(isPlaying: false)
+            : s.copyWith(isPlaying: false, errorMessage: '停止に失敗しました'),
+        stage: 'seek_to_bookmark_stop',
+      );
     }
+    if (!_isOriginEffectCurrent(origin) || state.content == null) return;
     final progressPct =
         (position / state.content!.body.length * 100).clamp(0.0, 100.0);
-    await seekTo(progressPct);
+    await seekTo(origin: origin, progressPct: progressPct);
     // 再生中だった場合は指定位置から再生を再開
     if (wasPlaying) {
-      await play();
+      await play(origin: origin);
     }
   }
 
-  Future<void> seekTo(double progressPct) async {
-    if (state.content == null) return;
-    final position =
-        (state.content!.body.length * progressPct / 100).round();
+  Future<void> seekTo(
+      {required PlayerOriginToken origin, required double progressPct}) async {
+    if (!_isOriginEffectCurrent(origin)) return;
+    if (state.content == null || state.content!.id != origin.contentId) return;
+    final position = (state.content!.body.length * progressPct / 100).round();
     await _savePlaybackState.execute(
-      contentId: state.content!.id,
+      contentId: origin.contentId,
       position: position,
       progressPct: progressPct,
     );
-    state = state.copyWith(
-      highlightPosition: position,
-      playbackState: state.playbackState?.copyWith(
-        position: position,
-        progressPct: progressPct,
+    _write(
+      origin,
+      (s) => s.copyWith(
+        highlightPosition: position,
+        playbackState: s.playbackState
+            ?.copyWith(position: position, progressPct: progressPct),
       ),
+      stage: 'seek_to',
     );
   }
 
   /// 表解説付き新規テキストを作成する（REQ-034）
-  Future<Content?> createTableDescriptionContent() async {
-    if (state.content == null) return null;
+  Future<Content?> createTableDescriptionContent(
+      {required PlayerOriginToken origin}) async {
+    if (!_isOriginEffectCurrent(origin)) return null;
+    if (state.content == null || state.content!.id != origin.contentId) {
+      return null;
+    }
     try {
       final original = state.content!;
       final newTitle = '(表)${original.title}';
@@ -611,17 +829,18 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         sourceUrl: original.sourceUrl,
         sourceFilename: original.sourceFilename,
       );
-
       return newContent;
     } catch (e) {
-      state = state.copyWith(errorMessage: '新規テキストの作成に失敗しました: $e');
+      _write(origin, (s) => s.copyWith(errorMessage: '新規テキストの作成に失敗しました: $e'),
+          stage: 'w1_create_table_description_content_error');
       return null;
     }
   }
 
   /// バックグラウンドで目次作成を実行する（REQ-034）
+  /// 契約上 throw しない（呼び出し側は `unawaited(...)` で起動する）。
   Future<void> createTocInBackground({
-    required String contentId,
+    required PlayerOriginToken origin,
     required String text,
     required String apiKey,
     required String provider,
@@ -630,12 +849,14 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required int totalChars,
     required String tocPrompt,
   }) async {
-    state = state.copyWith(tocCreating: true, tocCompleted: false); // REQ-034
+    if (!_isOriginEffectCurrent(origin)) return;
+    _write(origin, (s) => s.copyWith(tocCreating: true, tocCompleted: false),
+        stage: 'w3_start'); // REQ-034
     try {
       final List<dynamic> bookmarks;
       if (provider == 'groq') {
         bookmarks = await GroqService().analyzeAndCreateBookmarks(
-          contentId: contentId,
+          contentId: origin.contentId,
           text: text,
           apiKey: apiKey,
           shouldClean: shouldClean,
@@ -645,7 +866,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         );
       } else if (provider == 'claude') {
         bookmarks = await ClaudeService().analyzeAndCreateBookmarks(
-          contentId: contentId,
+          contentId: origin.contentId,
           text: text,
           apiKey: apiKey,
           shouldClean: shouldClean,
@@ -655,7 +876,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         );
       } else {
         bookmarks = await GeminiService().analyzeAndCreateBookmarks(
-          contentId: contentId,
+          contentId: origin.contentId,
           text: text,
           apiKey: apiKey,
           shouldClean: shouldClean,
@@ -665,14 +886,20 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         );
       }
       for (final bookmark in bookmarks) {
-        await addBookmarkDirect(bookmark);
+        if (!_isOriginEffectCurrent(origin)) return; // 次の副作用前に再検証、失効なら即停止
+        await addBookmarkDirect(origin: origin, bookmark: bookmark);
       }
-      state = state.copyWith(tocCreating: false, tocCompleted: true); // REQ-034
+      _write(origin, (s) => s.copyWith(tocCreating: false, tocCompleted: true),
+          stage: 'w3_complete'); // REQ-034
     } catch (e) {
-      state = state.copyWith(
-        tocCreating: false,
-        tocCompleted: false,
-        errorMessage: _tocErrorMessage(e),
+      _write(
+        origin,
+        (s) => s.copyWith(
+          tocCreating: false,
+          tocCompleted: false,
+          errorMessage: _tocErrorMessage(e),
+        ),
+        stage: 'w3_error',
       ); // REQ-034
     }
   }
@@ -691,7 +918,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   @override
   void dispose() {
     _playbackStateSubscription?.cancel();
-    _startPlayback.dispose();
+    _playbackGate.dispose();
     super.dispose();
   }
 }

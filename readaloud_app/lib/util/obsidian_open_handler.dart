@@ -16,7 +16,16 @@ class ObsidianOpenHandler {
 
   /// [content]のvaultName・relativePathを使ってObsidianアプリでノートを開く。
   /// 起動結果に応じて、未インストール時のダイアログや失敗時のスナックバーを表示する。
-  Future<void> open(BuildContext context, Content content) async {
+  ///
+  /// v0.4.1 D18: [isStillCurrent] / [showOwnedDialog] は Normal Player からの
+  /// 呼び出し（currentness gating・session-owned dialog 管理）のための optional
+  /// hook。未指定の場合（Home 等の既存呼び出し）は従来どおりの挙動になる。
+  Future<void> open(
+    BuildContext context,
+    Content content, {
+    bool Function()? isStillCurrent,
+    Future<bool?> Function(WidgetBuilder builder)? showOwnedDialog,
+  }) async {
     final vaultName = content.vaultName;
     final relativePath = content.relativePath;
     if (vaultName == null || relativePath == null) return;
@@ -27,12 +36,13 @@ class ObsidianOpenHandler {
     );
 
     if (!context.mounted) return;
+    if (isStillCurrent != null && !isStillCurrent()) return;
 
     switch (result) {
       case ObsidianLaunchResult.success:
         break;
       case ObsidianLaunchResult.notInstalled:
-        await _showNotInstalledDialog(context);
+        await _showNotInstalledDialog(context, showOwnedDialog);
         break;
       case ObsidianLaunchResult.launchFailed:
         ScaffoldMessenger.of(context).showSnackBar(
@@ -45,33 +55,38 @@ class ObsidianOpenHandler {
     }
   }
 
-  Future<void> _showNotInstalledDialog(BuildContext context) async {
-    final shouldOpenStore = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A3E),
-        title: const Text(
-          'Obsidianアプリが見つかりません',
-          style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 15),
-        ),
-        content: const Text(
-          'Obsidianアプリがインストールされていないため開けませんでした。ストアからインストールしますか？',
-          style: TextStyle(color: Color(0xFF8888AA), fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('キャンセル',
-                style: TextStyle(color: Color(0xFF8888AA))),
+  Future<void> _showNotInstalledDialog(
+    BuildContext context,
+    Future<bool?> Function(WidgetBuilder builder)? showOwnedDialog,
+  ) async {
+    Widget builder(BuildContext context) => AlertDialog(
+          backgroundColor: const Color(0xFF2A2A3E),
+          title: const Text(
+            'Obsidianアプリが見つかりません',
+            style: TextStyle(color: Color(0xFFF0F0F8), fontSize: 15),
           ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('ストアを開く',
-                style: TextStyle(color: Color(0xFF9B6FE0))),
+          content: const Text(
+            'Obsidianアプリがインストールされていないため開けませんでした。ストアからインストールしますか？',
+            style: TextStyle(color: Color(0xFF8888AA), fontSize: 13),
           ),
-        ],
-      ),
-    );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('キャンセル',
+                  style: TextStyle(color: Color(0xFF8888AA))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('ストアを開く',
+                  style: TextStyle(color: Color(0xFF9B6FE0))),
+            ),
+          ],
+        );
+
+    final owned = showOwnedDialog;
+    final shouldOpenStore = owned != null
+        ? await owned(builder)
+        : await showDialog<bool>(context: context, builder: builder);
 
     if (shouldOpenStore == true) {
       await _launcher.openPlayStore();

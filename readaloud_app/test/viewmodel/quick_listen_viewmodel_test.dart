@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/model/content.dart';
+import 'package:readaloud_app/model/normal_player_session.dart';
 import 'package:readaloud_app/model/quick_listen_session.dart';
 import 'package:readaloud_app/model/tts_playback_position.dart';
 import 'package:readaloud_app/repository/content_repository.dart';
@@ -98,7 +99,8 @@ void main() {
       expect(second, same(first));
     });
 
-    test('save()を同時(Future.wait)に呼んでも二重保存されず、両方の呼び出し元が同じ結果を受け取る'
+    test(
+        'save()を同時(Future.wait)に呼んでも二重保存されず、両方の呼び出し元が同じ結果を受け取る'
         '（concurrent double tap対策）', () async {
       viewModel.start(QuickListenSession(text: '同時タップされるテキスト'));
 
@@ -111,8 +113,7 @@ void main() {
       expect(results[1], same(results[0]));
     });
 
-    test('save()実行中に新しい共有でセッションが置き換わっても、完了時に古いセッションの状態で上書きしない',
-        () async {
+    test('save()実行中に新しい共有でセッションが置き換わっても、完了時に古いセッションの状態で上書きしない', () async {
       viewModel.start(QuickListenSession(text: '保存対象だったテキストA'));
       final pendingSave = viewModel.save();
 
@@ -130,8 +131,7 @@ void main() {
       expect(viewModel.state.hasSaved, isFalse);
     });
 
-    test('save()が失敗した場合は何も保存されず、再試行(retry)で成功した時だけ1件保存される',
-        () async {
+    test('save()が失敗した場合は何も保存されず、再試行(retry)で成功した時だけ1件保存される', () async {
       contentRepo.failNextSaves = 1;
       viewModel.start(QuickListenSession(text: '失敗後にリトライするテキスト'));
 
@@ -200,8 +200,7 @@ void main() {
       await positionController.close();
     });
 
-    test(
-        'session start → position received → play requested の順でイベントが記録される',
+    test('session start → position received → play requested の順でイベントが記録される',
         () async {
       viewModel.start(QuickListenSession(text: '順序を検証するテキスト'));
 
@@ -231,7 +230,8 @@ void main() {
       expect(receivedIndex, lessThan(requestedIndex));
     });
 
-    test('tts_position_receivedの本文断片(word等)は記録されない（DebugLoggerのforbidden key経由で保証）',
+    test(
+        'tts_position_receivedの本文断片(word等)は記録されない（DebugLoggerのforbidden key経由で保証）',
         () async {
       viewModel.start(QuickListenSession(text: '本文が漏れないことを確認するテキスト'));
       positionController.add(const TtsPlaybackPosition(
@@ -288,8 +288,10 @@ void main() {
 
       final requestedLine = DebugLogger.testSink!
           .firstWhere((l) => l.contains('event=tts_play_requested'));
-      expect(requestedLine, contains('startPositionPassedToSpeak=$actualStartPosition'));
-      expect(requestedLine, contains('highlightPositionAtPlayCall=$actualStartPosition'));
+      expect(requestedLine,
+          contains('startPositionPassedToSpeak=$actualStartPosition'));
+      expect(requestedLine,
+          contains('highlightPositionAtPlayCall=$actualStartPosition'));
 
       final receivedLine = DebugLogger.testSink!
           .firstWhere((l) => l.contains('event=tts_position_received'));
@@ -409,8 +411,7 @@ void main() {
         '競合ケース: play()後に旧Player由来のstale isPlaying:trueイベント'
         '(sessionId無しのためcharPosition=601)が先着し、その直後に現Quick Listen'
         '自身のcharPosition=0/playingイベントが届く場合でも、最終的にstateは'
-        'stale 601へ不正に確定せず、speak()にはstartPosition:0が渡ったままである',
-        () async {
+        'stale 601へ不正に確定せず、speak()にはstartPosition:0が渡ったままである', () async {
       // audioHandler.customStateにはQuick Listen sessionIdが乗らないため、
       // 現在のゲート(_hasCalledPlayForCurrentSession && isPlaying)は
       // 「play()後に届いた最初のisPlaying:trueイベント」を無条件に
@@ -497,7 +498,8 @@ void main() {
       expect(line, isNot(contains(secret)));
     });
 
-    test('_handleSharedPayload()相当: セッション未設定のままpositionイベントが届いても'
+    test(
+        '_handleSharedPayload()相当: セッション未設定のままpositionイベントが届いても'
         'stateへ反映されない（play()を一度も呼んでいないため）', () async {
       // start()すら呼ばれていない（session未設定）状態で、
       // audioHandler.customState購読直後にstale eventが再送されるケースを再現。
@@ -510,6 +512,78 @@ void main() {
 
       expect(viewModel.state.session, isNull);
       expect(viewModel.state.highlightPosition, 0);
+    });
+  });
+
+  group(
+      'QuickListenViewModel owner-key isolation（CB-3 closure, Canonical v0.4.1 D14）',
+      () {
+    late _FakeContentRepository contentRepo;
+    late _FakeSettingsRepository settingsRepo;
+    late _FakeTtsService ttsService;
+    late _SpyCountTtsUsageUseCase spyCountUsage;
+    late QuickListenViewModel viewModel;
+
+    setUp(() {
+      contentRepo = _FakeContentRepository();
+      settingsRepo = _FakeSettingsRepository();
+      ttsService = _FakeTtsService();
+      spyCountUsage = _SpyCountTtsUsageUseCase(
+        settingsRepo: settingsRepo,
+        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+      );
+      viewModel = QuickListenViewModel(
+        ttsService: ttsService,
+        settingsRepo: settingsRepo,
+        saveContent: SaveContentUseCase(contentRepo),
+        countUsage: spyCountUsage,
+        positionStream: const Stream.empty(),
+        getCurrentPosition: () => 0,
+      );
+    });
+
+    test(
+        '旧セッションを新しい共有で置き換えると、固定文字列(\'quick-listen\')ではなく'
+        '置換前セッション自身のownerでstopCountingが呼ばれ、新セッションのownerと'
+        '混同されない（CB-3回帰防止）', () async {
+      viewModel.start(QuickListenSession(text: 'セッションA'));
+      await viewModel.play();
+      final sessionA = viewModel.state.session!;
+
+      expect(spyCountUsage.startCalls,
+          [PlaybackOwnerKey.quickListen(sessionA.id)]);
+
+      viewModel.start(QuickListenSession(text: 'セッションBに置き換え'));
+      final sessionB = viewModel.state.session!;
+
+      expect(sessionB.id, isNot(sessionA.id));
+      expect(
+          spyCountUsage.stopCalls, [PlaybackOwnerKey.quickListen(sessionA.id)],
+          reason: '置換前セッション自身のownerでstopCountingが呼ばれる（固定文字列ownerへの'
+              '回帰や、新セッションownerとの取り違えが無いこと）');
+
+      await viewModel.play();
+      expect(spyCountUsage.startCalls, [
+        PlaybackOwnerKey.quickListen(sessionA.id),
+        PlaybackOwnerKey.quickListen(sessionB.id),
+      ]);
+
+      await viewModel.pause();
+      expect(spyCountUsage.stopCalls.last,
+          PlaybackOwnerKey.quickListen(sessionB.id),
+          reason: 'pause()もsession-derived ownerを使う');
+
+      await viewModel.close();
+      expect(spyCountUsage.stopCalls.last,
+          PlaybackOwnerKey.quickListen(sessionB.id),
+          reason: 'close()もsession-derived ownerを使う');
+    });
+
+    test('セッション未設定のままpause()/close()を呼んでもstopCountingは呼ばれない（D14ガード）', () async {
+      await viewModel.pause();
+      await viewModel.close();
+
+      expect(spyCountUsage.stopCalls, isEmpty);
     });
   });
 }
@@ -548,6 +622,40 @@ class _FakeTtsService implements TtsService {
 
   @override
   Future<void> dispose() async {}
+}
+
+/// CB-3回帰防止用のspy。CountTtsUsageUseCaseは具象クラスのため、
+/// startCounting/stopCountingへ渡されたownerを記録するためだけに
+/// override + super呼び出しで実体験みする（実際のflushロジック自体は
+/// 変更しない）。
+class _SpyCountTtsUsageUseCase extends CountTtsUsageUseCase {
+  _SpyCountTtsUsageUseCase({
+    required super.settingsRepo,
+    required super.checkLimit,
+  });
+
+  final List<PlaybackOwnerKey> startCalls = [];
+  final List<PlaybackOwnerKey> stopCalls = [];
+
+  @override
+  void startCounting({
+    required PlaybackOwnerKey owner,
+    required int totalChars,
+    required int startPosition,
+  }) {
+    startCalls.add(owner);
+    super.startCounting(
+      owner: owner,
+      totalChars: totalChars,
+      startPosition: startPosition,
+    );
+  }
+
+  @override
+  Future<void> stopCounting(PlaybackOwnerKey owner) {
+    stopCalls.add(owner);
+    return super.stopCounting(owner);
+  }
 }
 
 class _FakeSettingsRepository implements SettingsRepository {
