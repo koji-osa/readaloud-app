@@ -7,6 +7,8 @@ import '../../usecase/content/update_content_usecase.dart';
 import '../../repository/impl/content_repository_impl.dart';
 import '../../repository/impl/playback_repository_impl.dart';
 import '../../model/content.dart';
+import '../../model/normal_player_session.dart';
+import '../../providers.dart';
 import '../add/add_screen.dart';
 import '../settings/settings_screen.dart';
 import '../player/player_screen.dart';
@@ -74,7 +76,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('キャンセル', style: TextStyle(color: Color(0xFF8888AA))),
+            child:
+                const Text('キャンセル', style: TextStyle(color: Color(0xFF8888AA))),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
@@ -105,159 +108,173 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         }
       },
       child: Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ヘッダー
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'ライブラリ',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFFF0F0F8),
+        body: SafeArea(
+          child: Column(
+            children: [
+              // ヘッダー
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'ライブラリ',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFF0F0F8),
+                      ),
                     ),
+                    IconButton(
+                      icon:
+                          const Icon(Icons.settings, color: Color(0xFF8888AA)),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const SettingsScreen()),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // TTS使用量バナー
+              const Padding(
+                padding: EdgeInsets.fromLTRB(14, 12, 14, 0),
+                child: TtsUsageBanner(),
+              ),
+              // フィルター
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      ('all', 'すべて'),
+                      ('unread', '未読'),
+                      ('in_progress', '読書中'),
+                      ('completed', '完了'),
+                    ].map((f) {
+                      final isSelected = state.selectedFilter == f.$1;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: FilterChip(
+                          label: Text(f.$2),
+                          selected: isSelected,
+                          onSelected: (_) => vm.changeFilter(f.$1),
+                          selectedColor: const Color(0xFF7C5CBF),
+                          backgroundColor: const Color(0xFF2A2A3E),
+                          labelStyle: TextStyle(
+                            color: isSelected
+                                ? Colors.white
+                                : const Color(0xFF8888AA),
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                          side: BorderSide(
+                            color: isSelected
+                                ? const Color(0xFF7C5CBF)
+                                : const Color(0xFF3A3A55),
+                          ),
+                        ),
+                      );
+                    }).toList(),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.settings, color: Color(0xFF8888AA)),
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                ),
+              ),
+              // コンテンツ一覧
+              Expanded(
+                child: state.isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : state.contents.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'コンテンツがありません\n＋ボタンから追加してください',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Color(0xFF8888AA)),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.all(14),
+                            itemCount: state.contents.length,
+                            itemBuilder: (context, index) {
+                              final content = state.contents[index];
+                              return ContentCard(
+                                content: content,
+                                onTap: () => _isSelectMode
+                                    ? _toggleSelect(content.id)
+                                    : _openPlayer(context, ref, content),
+                                onDelete: () =>
+                                    _confirmDelete(context, ref, content),
+                                onEditTitle: (currentTitle) =>
+                                    _showEditTitleDialog(
+                                        context, ref, content.id, currentTitle),
+                                progressPct:
+                                    state.progressMap[content.id] ?? 0.0,
+                                isSelectMode: _isSelectMode,
+                                isSelected: _selectedIds.contains(content.id),
+                                onLongPress: () => _isSelectMode
+                                    ? _toggleSelect(content.id)
+                                    : _enterSelectMode(content.id),
+                              );
+                            },
+                          ),
+              ),
+            ],
+          ),
+        ),
+        floatingActionButton: _isSelectMode
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  FloatingActionButton.extended(
+                    heroTag: 'cancel',
+                    onPressed: _exitSelectMode,
+                    backgroundColor: const Color(0xFF323248),
+                    label: const Text('キャンセル',
+                        style: TextStyle(color: Color(0xFFF0F0F8))),
+                  ),
+                  const SizedBox(width: 12),
+                  FloatingActionButton.extended(
+                    heroTag: 'delete',
+                    onPressed: _selectedIds.isEmpty
+                        ? null
+                        : () => _deleteSelected(context),
+                    backgroundColor: _selectedIds.isEmpty
+                        ? const Color(0xFF323248)
+                        : const Color(0xFFF87171),
+                    label: Text(
+                      '削除 (${_selectedIds.length})',
+                      style: const TextStyle(color: Color(0xFFF0F0F8)),
                     ),
                   ),
                 ],
+              )
+            : FloatingActionButton(
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const AddScreen()),
+                  );
+                  ref
+                      .read(contentListViewModelProvider.notifier)
+                      .loadContents();
+                },
+                backgroundColor: const Color(0xFF7C5CBF),
+                child: const Text('+',
+                    style: TextStyle(fontSize: 24, color: Colors.white)),
               ),
-            ),
-            // TTS使用量バナー
-            const Padding(
-              padding: EdgeInsets.fromLTRB(14, 12, 14, 0),
-              child: TtsUsageBanner(),
-            ),
-            // フィルター
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    ('all', 'すべて'),
-                    ('unread', '未読'),
-                    ('in_progress', '読書中'),
-                    ('completed', '完了'),
-                  ].map((f) {
-                    final isSelected = state.selectedFilter == f.$1;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: FilterChip(
-                        label: Text(f.$2),
-                        selected: isSelected,
-                        onSelected: (_) => vm.changeFilter(f.$1),
-                        selectedColor: const Color(0xFF7C5CBF),
-                        backgroundColor: const Color(0xFF2A2A3E),
-                        labelStyle: TextStyle(
-                          color: isSelected
-                              ? Colors.white
-                              : const Color(0xFF8888AA),
-                          fontWeight: isSelected
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        ),
-                        side: BorderSide(
-                          color: isSelected
-                              ? const Color(0xFF7C5CBF)
-                              : const Color(0xFF3A3A55),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
-            // コンテンツ一覧
-            Expanded(
-              child: state.isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : state.contents.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'コンテンツがありません\n＋ボタンから追加してください',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Color(0xFF8888AA)),
-                          ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(14),
-                          itemCount: state.contents.length,
-                          itemBuilder: (context, index) {
-                            final content = state.contents[index];
-                            return ContentCard(
-                              content: content,
-                              onTap: () => _isSelectMode
-                                  ? _toggleSelect(content.id)
-                                  : _openPlayer(context, ref, content),
-                              onDelete: () =>
-                                  _confirmDelete(context, ref, content),
-                              onEditTitle: (currentTitle) =>
-                                  _showEditTitleDialog(context, ref, content.id, currentTitle),
-                              progressPct: state.progressMap[content.id] ?? 0.0,
-                              isSelectMode: _isSelectMode,
-                              isSelected: _selectedIds.contains(content.id),
-                              onLongPress: () => _isSelectMode
-                                  ? _toggleSelect(content.id)
-                                  : _enterSelectMode(content.id),
-                            );
-                          },
-                        ),
-            ),
-          ],
-        ),
       ),
-      floatingActionButton: _isSelectMode
-          ? Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                FloatingActionButton.extended(
-                  heroTag: 'cancel',
-                  onPressed: _exitSelectMode,
-                  backgroundColor: const Color(0xFF323248),
-                  label: const Text('キャンセル', style: TextStyle(color: Color(0xFFF0F0F8))),
-                ),
-                const SizedBox(width: 12),
-                FloatingActionButton.extended(
-                  heroTag: 'delete',
-                  onPressed: _selectedIds.isEmpty ? null : () => _deleteSelected(context),
-                  backgroundColor: _selectedIds.isEmpty ? const Color(0xFF323248) : const Color(0xFFF87171),
-                  label: Text(
-                    '削除 (${_selectedIds.length})',
-                    style: const TextStyle(color: Color(0xFFF0F0F8)),
-                  ),
-                ),
-              ],
-            )
-          : FloatingActionButton(
-              onPressed: () async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const AddScreen()),
-                );
-                ref.read(contentListViewModelProvider.notifier).loadContents();
-              },
-              backgroundColor: const Color(0xFF7C5CBF),
-              child: const Text('+', style: TextStyle(fontSize: 24, color: Colors.white)),
-            ),
-    ),
     );
   }
 
-  Future<void> _showEditTitleDialog(BuildContext context, WidgetRef ref, String contentId, String currentTitle) async {
+  Future<void> _showEditTitleDialog(BuildContext context, WidgetRef ref,
+      String contentId, String currentTitle) async {
     final controller = TextEditingController(text: currentTitle);
     final newTitle = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF2A2A3E),
-        title: const Text('タイトルを編集', style: TextStyle(color: Color(0xFFF0F0F8))),
+        title:
+            const Text('タイトルを編集', style: TextStyle(color: Color(0xFFF0F0F8))),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -270,7 +287,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('キャンセル', style: TextStyle(color: Color(0xFF8888AA))),
+            child:
+                const Text('キャンセル', style: TextStyle(color: Color(0xFF8888AA))),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(controller.text),
@@ -280,19 +298,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
     if (newTitle != null && newTitle.isNotEmpty && mounted) {
-      ref.read(contentListViewModelProvider.notifier).updateTitle(contentId, newTitle);
+      ref
+          .read(contentListViewModelProvider.notifier)
+          .updateTitle(contentId, newTitle);
     }
   }
 
-  Future<void> _openPlayer(BuildContext context, WidgetRef ref, Content content) async {
+  Future<void> _openPlayer(
+      BuildContext context, WidgetRef ref, Content content) async {
     await DebugLogger.instance.logEvent('navigation_push_requested', {
       'target': 'player',
       'stackSource': 'content_card',
       'contentId': content.id,
     });
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => PlayerScreen(content: content)),
+    // v0.4.1 D4: session を作り、push より前に tracker へ register する。
+    final session = NormalPlayerSession(contentId: content.id);
+    final route = MaterialPageRoute<void>(
+      builder: (_) => PlayerScreen(content: content, sessionId: session.id),
     );
+    final tracker = ref.read(normalPlayerSessionTrackerProvider);
+    final token = tracker.register(session: session, route: route);
+    if (token == null) return; // Home起点はreplacingOriginを渡さないため通常起こらない
+    try {
+      await Navigator.of(context).push(route);
+      tracker.clearIfCurrent(route);
+    } catch (e) {
+      tracker.abortRegistration(token);
+      rethrow;
+    }
     // PlayerScreenから戻った時にコンテンツ一覧を更新
     ref.read(contentListViewModelProvider.notifier).loadContents();
   }
@@ -317,13 +350,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('キャンセル',
-                style: TextStyle(color: Color(0xFF8888AA))),
+            child:
+                const Text('キャンセル', style: TextStyle(color: Color(0xFF8888AA))),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('削除する',
-                style: TextStyle(color: Color(0xFFF87171))),
+            child:
+                const Text('削除する', style: TextStyle(color: Color(0xFFF87171))),
           ),
         ],
       ),

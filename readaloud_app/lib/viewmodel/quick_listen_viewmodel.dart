@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../model/content.dart';
+import '../model/normal_player_session.dart';
 import '../model/quick_listen_session.dart';
 import '../model/setting.dart';
 import '../model/tts_playback_position.dart';
@@ -145,12 +146,16 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
   /// 続けてしまう（TtsAudioHandlerは単一インスタンスのため）。そのため置き換え時は
   /// 必ずTTSと使用量カウントを止めてから新しいセッションを設定する。
   void start(QuickListenSession session) {
-    final replacedExisting = state.session != null;
+    final previousSession = state.session;
+    final replacedExisting = previousSession != null;
     if (replacedExisting) {
       // ignore: discarded_futures
       _ttsService.stop();
+      // v0.4.1 D14: 置換前セッション自身のownerで止める（固定文字列'quick-listen'
+      // ではなくsession-derived ownerに統一。CB-3 closure）。
       // ignore: discarded_futures
-      _countUsage.stopCounting('quick-listen');
+      _countUsage
+          .stopCounting(PlaybackOwnerKey.quickListen(previousSession.id));
     }
     // 直前のセッションに対するsave()が進行中でも、新セッションのsave()は
     // それに相乗りせず必ず新しいSaveContentUseCase呼び出しを行うようにする。
@@ -191,7 +196,7 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
       // 渡す値が食い違わないようにするため。
       final startPosition = state.highlightPosition;
       _countUsage.startCounting(
-        contentId: 'quick-listen:${session.id}',
+        owner: PlaybackOwnerKey.quickListen(session.id),
         totalChars: session.text.length,
         startPosition: startPosition,
       );
@@ -224,14 +229,20 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
 
   Future<void> pause() async {
     final position = _getCurrentPosition();
-    await _countUsage.stopCounting('quick-listen');
+    final session = state.session;
+    if (session != null) {
+      await _countUsage.stopCounting(PlaybackOwnerKey.quickListen(session.id));
+    }
     await _ttsService.pause();
     state = state.copyWith(isPlaying: false, highlightPosition: position);
   }
 
   /// セッションを破棄する。TTSを止めるだけでDBへの変更は一切行わない。
   Future<void> close() async {
-    await _countUsage.stopCounting('quick-listen');
+    final session = state.session;
+    if (session != null) {
+      await _countUsage.stopCounting(PlaybackOwnerKey.quickListen(session.id));
+    }
     await _ttsService.stop();
     state = const QuickListenState();
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +15,8 @@ import '../../repository/impl/obsidian_repository_impl.dart';
 import '../../repository/impl/docman_vault_data_source.dart';
 import '../../repository/impl/settings_repository_impl.dart';
 import '../../model/content.dart';
+import '../../model/normal_player_session.dart';
+import '../../providers.dart';
 import '../player/player_screen.dart';
 import '../home/home_screen.dart';
 import '../settings/settings_screen.dart';
@@ -40,7 +44,8 @@ final obsidianImportViewModelProvider = StateNotifierProvider.autoDispose<
   return ObsidianImportViewModel(
     repository: obsidianRepo,
     importer: ObsidianImporter(obsidianRepo),
-    importContent: ImportContentUseCase(SaveContentUseCase(ContentRepositoryImpl())),
+    importContent:
+        ImportContentUseCase(SaveContentUseCase(ContentRepositoryImpl())),
   );
 });
 
@@ -94,9 +99,25 @@ class _AddScreenState extends ConsumerState<AddScreen>
     if (mounted) {
       // 保存完了後・画面遷移前に一覧を更新（FIX-024）
       ref.read(contentListViewModelProvider.notifier).loadContents();
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => PlayerScreen(content: content, autoPlay: true)),
+      // v0.4.1 D4: session を作り、pushReplacement より前に tracker へ register する。
+      final session = NormalPlayerSession(contentId: content.id);
+      final route = MaterialPageRoute<void>(
+        builder: (_) => PlayerScreen(
+            content: content, sessionId: session.id, autoPlay: true),
       );
+      final tracker = ref.read(normalPlayerSessionTrackerProvider);
+      final token = tracker.register(session: session, route: route);
+      if (token == null) return; // AddScreen起点はreplacingOriginを渡さないため通常起こらない
+      try {
+        unawaited(
+          Navigator.of(context)
+              .pushReplacement(route)
+              .then((_) => tracker.clearIfCurrent(route)),
+        );
+      } catch (e) {
+        tracker.abortRegistration(token);
+        rethrow;
+      }
     }
   }
 
@@ -128,8 +149,8 @@ class _AddScreenState extends ConsumerState<AddScreen>
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.arrow_back,
-                        color: Color(0xFF8888AA)),
+                    icon:
+                        const Icon(Icons.arrow_back, color: Color(0xFF8888AA)),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   const Text(
@@ -175,8 +196,7 @@ class _AddScreenState extends ConsumerState<AddScreen>
                   _UrlTab(
                     controller: _urlController,
                     onStart: () async {
-                      final content =
-                          await vm.saveFromUrl(_urlController.text);
+                      final content = await vm.saveFromUrl(_urlController.text);
                       if (content != null) await _startReading(content);
                     },
                     isLoading: state.isLoading,
