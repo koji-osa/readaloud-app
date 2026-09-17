@@ -3,6 +3,13 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import '../model/normal_player_session.dart';
+import '../model/playback_request.dart';
+import '../repository/playback_repository.dart';
+import '../usecase/playback/persistent_playback_resolver.dart';
+import '../usecase/playback/playback_persistence_policy.dart';
+import '../usecase/playback/playback_usage_accounting.dart';
+import '../usecase/playback/save_playback_state_usecase.dart';
+import '../usecase/playback/shared_playback_transport.dart';
 import '../usecase/playback/start_playback_usecase.dart';
 import '../usecase/playback/stop_playback_usecase.dart';
 import 'debug_logger.dart';
@@ -57,14 +64,119 @@ class _Registration {
   List<Route<dynamic>> get overlaysTopFirst => _overlayOrder.reversed.toList();
 }
 
-/// Normal Player の playback 遷移（start/pause/stop）を直列化する薄い gate。
+/// Normal Player の playback 遷移（start/pause/stop/teardown）を直列化する薄い gate。
 ///
 /// navigation・dialog・AI workflow・Player UI state は一切所有しない（D12）。
 /// 同一 session の in-flight stop は [NormalPlayerSessionTracker] 側でも
 /// dedupe されるが、この gate 自身も start/stop/pause を単一 chain 上に
 /// 直列化することで、A の遅延 stop が B の新しい start と交差する事故を防ぐ。
+///
+/// Shared Player Core Slice 3: public API は不変。production は
+/// [NormalPlayerPlaybackGate.shared] で [SharedPlaybackTransport] +
+/// [PersistentPlaybackResolver] + [PersistentPersistencePolicy] +
+/// [PersistentUsageAccounting] へ委譲する。旧 usecase を受け取る既定
+/// constructor は、既存テスト harness のために Slice 3c（別 cleanup PR）まで
+/// 残す。
 class NormalPlayerPlaybackGate {
   NormalPlayerPlaybackGate({
+    required StartPlaybackUseCase startPlayback,
+    required StopPlaybackUseCase stopPlayback,
+    required int Function() getCurrentPosition,
+  }) : _backend = _UseCasePlaybackBackend(
+          startPlayback: startPlayback,
+          stopPlayback: stopPlayback,
+          getCurrentPosition: getCurrentPosition,
+        );
+
+  NormalPlayerPlaybackGate.shared({
+    required SharedPlaybackTransport transport,
+    required PersistentPlaybackResolver resolver,
+    required PlaybackRepository playbackRepo,
+    required SavePlaybackStateUseCase savePlaybackState,
+    required PlaybackUsageAccounting accounting,
+  }) : _backend = _SharedTransportPlaybackBackend(
+          transport: transport,
+          resolver: resolver,
+          playbackRepo: playbackRepo,
+          savePlaybackState: savePlaybackState,
+          accounting: accounting,
+        );
+
+  final _NormalPlayerPlaybackBackend _backend;
+
+  Future<void> start({required String sessionId, required String contentId}) =>
+      _backend.start(sessionId: sessionId, contentId: contentId);
+
+  Future<PlaybackStopOutcome> pause({
+    required String sessionId,
+    required String contentId,
+    required int position,
+  }) =>
+      _backend.pause(
+          sessionId: sessionId, contentId: contentId, position: position);
+
+  /// UI 起点の停止（seek / 速度変更 / AppBar back 等）。
+  /// [position] を省略した場合は共有 audioHandler の現在位置を使う。
+  Future<PlaybackStopOutcome> stopForSession({
+    required String sessionId,
+    required String contentId,
+    int? position,
+  }) =>
+      _backend.stopForSession(
+          sessionId: sessionId, contentId: contentId, position: position);
+
+  /// tracker 主導の owner-retiring teardown 経路（live VM を再 read しない、D16）。
+  /// shared 構成では `expectedOwner = np(sessionId)` で owner-gated な
+  /// force-stop + resume fence を行い、別 owner が active なら何もしない。
+  Future<PlaybackStopOutcome> teardownForSession({
+    required String sessionId,
+    required String contentId,
+    required TeardownReason reason,
+  }) =>
+      _backend.teardownForSession(
+          sessionId: sessionId, contentId: contentId, reason: reason);
+
+  /// external / share entry 用の Playback Retirement Authority（v1.3 §6.3 B/C）。
+  ///
+  /// route 上の session ではなく、Transport が保持する authoritative な
+  /// active playback を retire（stop + handoff fence）する。retire した target
+  /// が Persistent なら、その target 自身の content へ停止位置を保存する
+  /// （current route の別 content へは書かない）。never throws。
+  Future<PlaybackStopOutcome> retireActiveForExternalEntry({
+    required TeardownReason reason,
+  }) =>
+      _backend.retireActiveForExternalEntry(reason: reason);
+
+  /// provider の ref.onDispose からのみ呼ぶ（R-7）。
+  void dispose() => _backend.dispose();
+}
+
+abstract interface class _NormalPlayerPlaybackBackend {
+  Future<void> start({required String sessionId, required String contentId});
+  Future<PlaybackStopOutcome> pause({
+    required String sessionId,
+    required String contentId,
+    required int position,
+  });
+  Future<PlaybackStopOutcome> stopForSession({
+    required String sessionId,
+    required String contentId,
+    int? position,
+  });
+  Future<PlaybackStopOutcome> teardownForSession({
+    required String sessionId,
+    required String contentId,
+    required TeardownReason reason,
+  });
+  Future<PlaybackStopOutcome> retireActiveForExternalEntry({
+    required TeardownReason reason,
+  });
+  void dispose();
+}
+
+/// 旧 usecase 構成（Slice 3c で削除予定）。挙動は v1.2.22 と同一。
+class _UseCasePlaybackBackend implements _NormalPlayerPlaybackBackend {
+  _UseCasePlaybackBackend({
     required StartPlaybackUseCase startPlayback,
     required StopPlaybackUseCase stopPlayback,
     required int Function() getCurrentPosition,
@@ -87,6 +199,7 @@ class NormalPlayerPlaybackGate {
     return result;
   }
 
+  @override
   Future<void> start({required String sessionId, required String contentId}) {
     return _enqueue(() => _startPlayback.execute(
           contentId,
@@ -94,6 +207,7 @@ class NormalPlayerPlaybackGate {
         ));
   }
 
+  @override
   Future<PlaybackStopOutcome> pause({
     required String sessionId,
     required String contentId,
@@ -106,8 +220,7 @@ class NormalPlayerPlaybackGate {
         ));
   }
 
-  /// [position] を省略した場合は共有 audioHandler の現在位置を使う。
-  /// tracker 主導の teardown 経路（live VM を再 read しない、D16）はこちらを使う。
+  @override
   Future<PlaybackStopOutcome> stopForSession({
     required String sessionId,
     required String contentId,
@@ -120,7 +233,186 @@ class NormalPlayerPlaybackGate {
         ));
   }
 
+  @override
+  Future<PlaybackStopOutcome> teardownForSession({
+    required String sessionId,
+    required String contentId,
+    required TeardownReason reason,
+  }) =>
+      stopForSession(sessionId: sessionId, contentId: contentId);
+
+  /// 旧 usecase 構成は authoritative な playback owner を持たないため、
+  /// external-entry retirement を提供しない（production は shared 構成のみ）。
+  @override
+  Future<PlaybackStopOutcome> retireActiveForExternalEntry({
+    required TeardownReason reason,
+  }) =>
+      throw UnsupportedError(
+          'external-entry retirement requires NormalPlayerPlaybackGate.shared');
+
+  @override
   void dispose() => _startPlayback.dispose();
+}
+
+/// Shared Playback Transport 構成（production）。
+class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
+  _SharedTransportPlaybackBackend({
+    required SharedPlaybackTransport transport,
+    required PersistentPlaybackResolver resolver,
+    required PlaybackRepository playbackRepo,
+    required SavePlaybackStateUseCase savePlaybackState,
+    required PlaybackUsageAccounting accounting,
+  })  : _transport = transport,
+        _resolver = resolver,
+        _playbackRepo = playbackRepo,
+        _savePlaybackState = savePlaybackState,
+        _accounting = accounting;
+
+  final SharedPlaybackTransport _transport;
+  final PersistentPlaybackResolver _resolver;
+  final PlaybackRepository _playbackRepo;
+  final SavePlaybackStateUseCase _savePlaybackState;
+  final PlaybackUsageAccounting _accounting;
+
+  PersistentPersistencePolicy _policyFor(String contentId) =>
+      PersistentPersistencePolicy(
+        target: PersistentTarget.ofRegisteredSessionContentId(contentId),
+        playbackRepo: _playbackRepo,
+        savePlaybackState: _savePlaybackState,
+      );
+
+  @override
+  Future<void> start({required String sessionId, required String contentId}) {
+    // 解決（DB 読込・status 更新）も NP/Transient 共通 chain 上で行う。
+    return _transport.exclusive((ops) async {
+      final request = await _resolver.resolveForStart(contentId);
+      await ops.startUnlocked(
+        PlaybackOwnerKey.normalPlayer(sessionId),
+        request,
+        accounting: _accounting,
+        logFields: {'origin': 'player', 'contentId': contentId},
+      );
+    });
+  }
+
+  @override
+  Future<PlaybackStopOutcome> pause({
+    required String sessionId,
+    required String contentId,
+    required int position,
+  }) =>
+      _transport.exclusive((ops) async => _toStopOutcome(
+            await ops.pauseUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
+            contentId: contentId,
+            position: position,
+          ));
+
+  @override
+  Future<PlaybackStopOutcome> stopForSession({
+    required String sessionId,
+    required String contentId,
+    int? position,
+  }) =>
+      _transport.exclusive((ops) async => _toStopOutcome(
+            await ops.stopUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
+            contentId: contentId,
+            position: position,
+          ));
+
+  Future<PlaybackStopOutcome> _toStopOutcome(
+    OwnedCommandResult result, {
+    required String contentId,
+    required int? position,
+  }) async {
+    switch (result) {
+      case CommandIgnoredStaleOwner():
+        // この session は TTS を所有していない。TTS・accounting・state・DB の
+        // いずれにも触れない（別 owner の位置を自 content へ保存しない）。
+        return PlaybackStopOutcome.notApplicable();
+      case CommandApplied():
+        final saved = await _policyFor(contentId)
+            .persistStopPosition(position: position ?? result.positionAtStop);
+        return PlaybackStopOutcome(
+          ttsStopSucceeded: result.ttsSucceeded,
+          usageFlushSucceeded: result.usageFlushSucceeded,
+          positionSaveSucceeded: saved.succeeded,
+          ttsStopErrorType: result.ttsErrorType,
+          usageFlushErrorType: result.usageFlushErrorType,
+          positionSaveErrorType: saved.errorType,
+        );
+    }
+  }
+
+  @override
+  Future<PlaybackStopOutcome> teardownForSession({
+    required String sessionId,
+    required String contentId,
+    required TeardownReason reason,
+  }) =>
+      _transport.exclusive((ops) async {
+        final outcome = await ops.forceStopForTeardownUnlocked(
+          expectedOwner: PlaybackOwnerKey.normalPlayer(sessionId),
+          reason: reason,
+          notificationDisposition: NotificationDisposition.handoff,
+        );
+        switch (outcome.application) {
+          case TeardownApplication.noActivePlayback:
+            return PlaybackStopOutcome.notApplicable();
+          case TeardownApplication.ignoredStaleOwner:
+            // D8/D16: ttsStopConfirmed == false となり route 除去は進まない。
+            return PlaybackStopOutcome(
+              ttsStopSucceeded: false,
+              usageFlushSucceeded: true,
+              positionSaveSucceeded: true,
+              ttsStopErrorType: outcome.ttsStopErrorType,
+            );
+          case TeardownApplication.applied:
+            final saved = await _policyFor(contentId)
+                .persistStopPosition(position: outcome.positionAtStop);
+            return PlaybackStopOutcome(
+              ttsStopSucceeded: outcome.ttsStopSucceeded,
+              usageFlushSucceeded: outcome.usageFlushSucceeded,
+              positionSaveSucceeded: saved.succeeded,
+              ttsStopErrorType: outcome.ttsStopErrorType,
+              usageFlushErrorType: outcome.usageFlushErrorType,
+              positionSaveErrorType: saved.errorType,
+            );
+        }
+      });
+
+  @override
+  Future<PlaybackStopOutcome> retireActiveForExternalEntry({
+    required TeardownReason reason,
+  }) =>
+      _transport.exclusive((ops) async {
+        final retirement =
+            await ops.retireActiveForExternalEntryUnlocked(reason: reason);
+        if (!retirement.hadActivePlayback) {
+          return PlaybackStopOutcome.notApplicable();
+        }
+        final stop = retirement.stopOutcome;
+        // Persistent なら retire した target 自身へ保存（AC-22）。Transient は非該当。
+        final PositionSaveResult saved = switch (retirement.retiredTarget) {
+          PersistentTarget target => await PersistentPersistencePolicy(
+              target: target,
+              playbackRepo: _playbackRepo,
+              savePlaybackState: _savePlaybackState,
+            ).persistStopPosition(position: stop.positionAtStop),
+          TransientTarget() || null => const PositionSaveResult.notApplicable(),
+        };
+        return PlaybackStopOutcome(
+          ttsStopSucceeded: stop.ttsStopSucceeded,
+          usageFlushSucceeded: stop.usageFlushSucceeded,
+          positionSaveSucceeded: saved.succeeded,
+          ttsStopErrorType: stop.ttsStopErrorType,
+          usageFlushErrorType: stop.usageFlushErrorType,
+          positionSaveErrorType: saved.errorType,
+        );
+      });
+
+  // Transport は app-shared provider の所有物。gate からは破棄しない。
+  @override
+  void dispose() {}
 }
 
 /// Normal Player の session 権威モデル（Canonical Design v0.4.1）。
@@ -233,8 +525,13 @@ class NormalPlayerSessionTracker {
   /// 最初の await より前に、同期的に current registration を capture して
   /// unique claim を追加する（Player を即座に effect-ineligible にする）。
   /// 停止は playback gate 経由で行う。**never throws**。
-  Future<PlayerRemovalTicket> prepareForRemoval(
-      {required String flowId}) async {
+  ///
+  /// Shared Player Core: 停止は owner-retiring teardown（[reason]）として
+  /// `expectedOwner = np(sessionId)` で行い、stop 後に resume state を fence する。
+  Future<PlayerRemovalTicket> prepareForRemoval({
+    required String flowId,
+    TeardownReason reason = TeardownReason.shareTeardown,
+  }) async {
     final reg = _current;
     if (reg == null) {
       return PlayerRemovalTicket.empty(flowId: flowId);
@@ -266,8 +563,8 @@ class NormalPlayerSessionTracker {
     }));
 
     final stopFuture = _inFlightStops.putIfAbsent(sessionId, () {
-      final future = _playbackGate.stopForSession(
-          sessionId: sessionId, contentId: contentId);
+      final future = _playbackGate.teardownForSession(
+          sessionId: sessionId, contentId: contentId, reason: reason);
       future.whenComplete(() {
         if (identical(_inFlightStops[sessionId], future)) {
           _inFlightStops.remove(sessionId);
@@ -309,6 +606,93 @@ class NormalPlayerSessionTracker {
       sessionId: sessionId,
       contentId: contentId,
       claimId: claimId,
+      flowId: flowId,
+      stopOutcome: outcome,
+    );
+  }
+
+  /// 【external / share entry 第1相 / async / Navigator に触れない】
+  /// v1.3 FINAL §6.3 C / INV-T11: Route Retirement と Playback Retirement を分離する。
+  ///
+  /// 1. 最初の await より前に current route registration（あれば）を同期 claim し、
+  ///    effect-ineligible にする（route owner は playback owner と一致しなくてよい）。
+  /// 2. playback gate 経由で Transport の authoritative active playback を retire
+  ///    （stop + handoff fence、Persistent なら retire した target 自身へ位置保存）。
+  ///
+  /// 返す ticket の stopOutcome は **実 active playback** の停止結果であり、route
+  /// owner と playback owner の不一致そのものは block 条件にならない。
+  /// route が無い場合も stopOutcome を持つ（claim は無い）。**never throws**。
+  Future<PlayerRemovalTicket> prepareForExternalEntry({
+    required String flowId,
+    required TeardownReason reason,
+  }) async {
+    final reg = _current;
+    final sessionId = reg?.session.id;
+    final contentId = reg?.session.contentId;
+    String? claimId;
+    if (reg != null) {
+      claimId = 'claim-$sessionId-${++_claimSeq}';
+      final wasActive = !reg.isRetiring;
+      reg.retirementClaims
+          .add(claimId); // ★ 同期。この行以降 route は effect-ineligible。
+      unawaited(DebugLogger.instance.logEvent(
+        wasActive
+            ? 'navigation_player_session_retiring'
+            : 'navigation_player_retirement_claim_added',
+        {
+          'sessionId': sessionId,
+          'contentId': contentId,
+          'flowId': flowId,
+          'claimCount': reg.retirementClaims.length,
+        },
+      ));
+    }
+
+    unawaited(DebugLogger.instance
+        .logEvent('navigation_active_playback_retire_requested', {
+      'routeSessionId': sessionId,
+      'flowId': flowId,
+    }));
+
+    PlaybackStopOutcome outcome;
+    try {
+      outcome =
+          await _playbackGate.retireActiveForExternalEntry(reason: reason);
+    } catch (e) {
+      // gate は never-throw 契約だが、防御的に最悪の場合を扱う（blind stop へは
+      // fallback しない）。
+      outcome = PlaybackStopOutcome(
+        ttsStopSucceeded: false,
+        usageFlushSucceeded: false,
+        positionSaveSucceeded: false,
+        ttsStopErrorType: e.runtimeType.toString(),
+      );
+    }
+
+    unawaited(DebugLogger.instance
+        .logEvent('navigation_active_playback_retire_completed', {
+      'routeSessionId': sessionId,
+      'flowId': flowId,
+      'applicable': outcome.applicable,
+      'ttsStopSucceeded': outcome.ttsStopSucceeded,
+      'usageFlushSucceeded': outcome.usageFlushSucceeded,
+      'positionSaveSucceeded': outcome.positionSaveSucceeded,
+    }));
+    if (!outcome.ttsStopConfirmed) {
+      unawaited(DebugLogger.instance.logEvent('player_stop_failed', {
+        'sessionId': sessionId,
+        'flowId': flowId,
+        'errorType': outcome.ttsStopErrorType,
+      }));
+    }
+
+    if (reg == null) {
+      return PlayerRemovalTicket.empty(flowId: flowId, stopOutcome: outcome);
+    }
+    return PlayerRemovalTicket.forSession(
+      sessionId: sessionId!,
+      contentId: contentId!,
+      claimId: claimId!,
       flowId: flowId,
       stopOutcome: outcome,
     );

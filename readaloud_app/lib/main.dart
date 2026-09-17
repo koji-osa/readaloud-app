@@ -8,17 +8,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ui/onboarding/onboarding_screen.dart';
 import 'ui/home/home_screen.dart';
 import 'ui/add/add_screen.dart';
-import 'ui/quick_listen/quick_listen_screen.dart'
-    show quickListenViewModelProvider;
 import 'repository/settings_repository.dart';
 import 'repository/impl/settings_repository_impl.dart';
 import 'repository/tts/device_tts_service.dart';
 import 'providers.dart';
+import 'model/quick_listen_session.dart';
 import 'model/setting.dart';
+import 'usecase/playback/shared_playback_transport.dart' show TeardownReason;
 import 'util/share_intent_handler.dart';
 import 'util/external_input_handler.dart';
 import 'util/debug_logger.dart';
-import 'util/quick_listen_route_tracker.dart';
+import 'util/player_entry_coordinator.dart';
 import 'util/share_fingerprint.dart';
 
 const String kAppVersion = '1.2.22+43';
@@ -106,8 +106,6 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
   bool _onboardingCompleted = false;
   late ShareIntentHandler _shareIntentHandler;
   late ExternalInputHandler _externalInputHandler;
-  final QuickListenRouteTracker _quickListenRouteTracker =
-      QuickListenRouteTracker();
 
   // Persistent Share Observability Phase 1: build()のたびに大量ログを
   // 出さないよう、直前に記録したroot targetを保持し、変化した時だけ記録する。
@@ -210,97 +208,41 @@ class _AppEntryPointState extends ConsumerState<AppEntryPoint>
     // 追跡できるようにする。
     final flowId = payload.flowId;
 
-    // v0.4.1 D8 step 2: 最初のawaitより前に同期的にPlayerをretiringにし、
-    // playback gate経由でTTS停止・usage flush・位置保存を試行する
-    // （never throws。stop完了より前にNormal Player routeを除去しない）。
-    final tracker = ref.read(normalPlayerSessionTrackerProvider);
-    unawaited(DebugLogger.instance
-        .logEvent('player_stop_requested', {'flowId': flowId}));
-    final ticket = await tracker.prepareForRemoval(flowId: flowId);
-    unawaited(DebugLogger.instance
-        .logEvent('player_stop_completed', {'flowId': flowId}));
-
-    try {
-      // v0.4.1 D8 step 4 / B-01 closure: 該当Playerが存在し、かつTTS-stopの
-      // 成功が確認できない場合は、Normal Player routeを除去せず covering
-      // routeもpushせずにreturnする。accounting/position-save失敗だけなら
-      // ここには引っかからない（ticket.stopOutcome.ttsStopConfirmed）。
-      if (ticket.representsCurrentPlayer &&
-          !ticket.stopOutcome.ttsStopConfirmed) {
-        unawaited(DebugLogger.instance.logEvent('error', {
-          'context': 'handle_shared_payload_tts_stop_unconfirmed',
-          'flowId': flowId,
-        }));
-        return;
-      }
-
-      // 通常Content再生・Quick Listen再生のいずれかが裏で継続していると、
-      // 単一のTtsAudioHandlerを取り合って状態汚染やTTS使用量の二重カウントに
-      // つながるため、新しい共有を処理する前に両方とも明示的に停止しておく。
-      // ログ自体は純粋なObservabilityで、DebugLoggerのseq採番＋write queueが
-      // 呼び出し順を保証するため、ファイルI/O完了はawaitせず共有→Navigationの
-      // タイミングに影響させない。close()本体は従来通りawaitする。
-      unawaited(DebugLogger.instance
-          .logEvent('quick_listen_close_requested', {'flowId': flowId}));
-      await ref.read(quickListenViewModelProvider.notifier).close();
-      unawaited(DebugLogger.instance
-          .logEvent('quick_listen_close_completed', {'flowId': flowId}));
-
-      if (!mounted) {
-        unawaited(DebugLogger.instance.logEvent('error', {
-          'context': 'handle_shared_payload_not_mounted',
-          'flowId': flowId,
-        }));
-        return;
-      }
-
-      // 直前のQuickListen routeがNavigator stack上に残っていれば、
-      // ここで対象routeだけを除去する。URL共有でAddScreenへ分岐する場合も
-      // 同じroute accumulation根因が起こりうるため、payload種別を判定する
-      // 前に必ず呼ぶ（詳細はQuickListenRouteTrackerのdocコメント参照）。
-      _quickListenRouteTracker.removeActiveQuickListen(
+    // Shared Player Core Slice 6: D8 二相 teardown（NP retire → stop確認 →
+    // Transient retire → mounted checkpoint → Transient route除去 → NP route除去
+    // → covering push、除去〜pushはzero-await、claimはfinallyで解放）は
+    // PlayerEntryCoordinator へ順序を変えずに抽出した。share 到着は
+    // owner-retiring handoff（shareTeardown）として旧 owner の resume state を
+    // fence してから次 owner へ渡す。
+    final coordinator = ref.read(playerEntryCoordinatorProvider);
+    if (payload.kind == SharedContentKind.url) {
+      await coordinator.openCovering(
         context: context,
+        isMounted: () => mounted,
         flowId: flowId,
+        reason: TeardownReason.shareTeardown,
+        pushCovering: (ctx) {
+          unawaited(DebugLogger.instance.logEvent('navigation_push_requested', {
+            'target': 'add_screen',
+            'stackSource': 'share_handler',
+            'flowId': flowId,
+          }));
+          Navigator.of(ctx).push(
+            MaterialPageRoute(
+              builder: (_) => AddScreen(initialUrl: value),
+            ),
+          );
+        },
       );
-
-      // v0.4.1: Normal Player route除去の権威ある唯一の場所。
-      // ここから次のcovering route pushまでの間にawaitを置かない
-      // （NRR-08 / zero-await guarantee。Home早期loadContents()と
-      // rapid-share latest-event semanticsを守るため）。
-      tracker.removeActivePlayerNow(ticket, context: context);
-
-      if (payload.kind == SharedContentKind.url) {
-        unawaited(DebugLogger.instance.logEvent('navigation_push_requested', {
-          'target': 'add_screen',
-          'stackSource': 'share_handler',
-          'flowId': flowId,
-        }));
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => AddScreen(initialUrl: value),
-          ),
-        );
-      } else {
-        _quickListenRouteTracker.openQuickListen(
-          context: context,
-          text: value,
-          flowId: flowId,
-        );
-      }
-    } catch (e) {
-      // No.94 Observability: 例外は握りつぶさず、ログだけ追加してrethrowする
-      // （既存の挙動・エラー伝播経路は変更しない）。
-      unawaited(DebugLogger.instance.logEvent('share_pipeline_error', {
-        'stage': 'payload_handler',
-        'flowId': flowId,
-        'errorType': e.runtimeType.toString(),
-      }));
-      rethrow;
-    } finally {
-      // v0.4.1 D8 step 11: 同期・冪等・identity-safe。自flowのclaimだけを
-      // 外す。他のclaimが残っている限りeffect-activeへは戻さない。
-      // 除去成功後・別sessionが既に登録済みの場合はno-op。
-      tracker.abandonRemoval(ticket);
+    } else {
+      await coordinator.openTransient(
+        context: context,
+        isMounted: () => mounted,
+        // 共有 text は TextCleaner を1回だけ適用して request にする（INV-18）。
+        request: QuickListenSession.fromSharedText(value).request,
+        flowId: flowId,
+        reason: TeardownReason.shareTeardown,
+      );
     }
   }
 

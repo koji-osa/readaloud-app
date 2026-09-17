@@ -2,13 +2,14 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../model/content.dart';
 import '../model/normal_player_session.dart';
+import '../model/playback_request.dart';
 import '../model/quick_listen_session.dart';
-import '../model/setting.dart';
-import '../model/tts_playback_position.dart';
-import '../repository/settings_repository.dart';
 import '../repository/tts/tts_service.dart';
-import '../usecase/content/save_content_usecase.dart';
-import '../usecase/tts/count_tts_usage_usecase.dart';
+import '../usecase/content/library_promotion_service.dart';
+import '../usecase/playback/playback_defaults_reader.dart';
+import '../usecase/playback/playback_usage_accounting.dart';
+import '../usecase/playback/seek_math.dart';
+import '../usecase/playback/shared_playback_transport.dart';
 import '../util/debug_logger.dart';
 import '../util/share_fingerprint.dart';
 
@@ -53,89 +54,77 @@ class QuickListenState {
       );
 }
 
-/// Quick Listen専用の再生アダプタ。
+/// Transient session controller（実装名 QuickListen*）。
 ///
-/// 既存のTtsService(audio_service)をそのまま利用して読み上げを行い、
-/// Content DB・PlaybackRepository・BookmarkRepositoryのいずれにも依存しない。
-/// 再生位置は外部（TtsAudioHandler.customState）から渡されるstreamで受け取るだけで、
-/// DBへは一切書き込まない。
+/// Shared Player Core（Detailed Design v1.2 FINAL）:
+/// - 再生は app-shared な [SharedPlaybackTransport] 経由。owner は
+///   `PlaybackOwnerKey.transient(sessionId)`。
+/// - user-visible TTS usage accounting の対象外（PD-1）。`const NoUsageAccounting()`。
+/// - write-capable な repository / DAO / DB usecase を受け取らない（INV-T1）。
+///   defaultSpeed は read-only な [PlaybackDefaultsReader] からのみ読む。
+///   Library への唯一の書込み seam は [LibraryPromotionService]。
+/// - Bookmark / TOC / 表解析 / 速度・声変更 / 巻戻し・早送りのメソッドは
+///   型として持たない（PD-2 capability gating）。
 class QuickListenViewModel extends StateNotifier<QuickListenState> {
-  final TtsService _ttsService;
-  final SettingsRepository _settingsRepo;
-  final SaveContentUseCase _saveContent;
-  final CountTtsUsageUseCase _countUsage;
-  final int Function() _getCurrentPosition;
+  final SharedPlaybackTransport _transport;
+  final PlaybackDefaultsReader _defaultsReader;
+  final LibraryPromotionService _promotion;
 
-  StreamSubscription<dynamic>? _positionSubscription;
+  StreamSubscription<PositionObservation>? _positionSubscription;
 
-  // Observability: このViewModelインスタンスがpositionStreamから最初に値を
-  // 受け取ったかどうか。BehaviorSubject経由で前セッション/前画面の値が
-  // 即座に再送される可能性を切り分けるためのフラグ（症状1のEvidence）。
+  /// 現在 session で最後に再生開始した速度（promotion handoff 用）。
+  double? _sessionSpeed;
+
+  // Observability: このViewModelインスタンスがpositionを最初に受け取ったかどうか。
+  // BehaviorSubject経由で前セッション/前画面の値が即座に再送される可能性を
+  // 切り分けるためのフラグ（症状1のEvidence）。
   bool _hasReceivedPosition = false;
 
-  // 症状1の修正: audioHandler.customState(positionStream)はBehaviorSubject
-  // 相当で、購読直後に「前回最後の値」を再送する。さらにstart()内でのstop()も
-  // 旧セッション最後のcharPositionを伴うcustomStateを再送しうる。
-  // これらは新セッション自身の再生開始と無関係な値のため、以下の2フラグで
-  // 「このセッション自身のplay()が実際に再生を開始したと確認できるまで」
-  // state.highlightPositionへの反映を止める。
-  //
-  // _hasCalledPlayForCurrentSession: このセッションでplay()を呼んだか。
-  //   play()より前に届くイベントは無条件で無視する（要件: 初回play開始前の
-  //   旧Player/旧セッション由来イベントを適用しない）。
-  // _acceptPositionUpdates: play()呼び出し後、実際に「このセッションの再生が
-  //   始まった」と確認できるisPlaying==trueイベントを受信して初めてtrueになる。
-  //   これによりplay()直後に紛れ込む旧stopped/pausedイベント（例: stop()自体が
-  //   発生させるcustomState再送）もstateを汚染しない。一度trueになった後は
-  //   同一セッション内のpause/resumeも含め通常どおり反映する。
-  bool _hasCalledPlayForCurrentSession = false;
-  bool _acceptPositionUpdates = false;
-
   QuickListenViewModel({
-    required TtsService ttsService,
-    required SettingsRepository settingsRepo,
-    required SaveContentUseCase saveContent,
-    required CountTtsUsageUseCase countUsage,
-    required Stream<dynamic> positionStream,
-    required int Function() getCurrentPosition,
-  })  : _ttsService = ttsService,
-        _settingsRepo = settingsRepo,
-        _saveContent = saveContent,
-        _countUsage = countUsage,
-        _getCurrentPosition = getCurrentPosition,
+    required SharedPlaybackTransport transport,
+    required PlaybackDefaultsReader defaultsReader,
+    required LibraryPromotionService promotion,
+  })  : _transport = transport,
+        _defaultsReader = defaultsReader,
+        _promotion = promotion,
         super(const QuickListenState()) {
-    _positionSubscription = positionStream.listen((data) {
-      if (data is! TtsPlaybackPosition) return;
-      final isFirstEvent = !_hasReceivedPosition;
-      _hasReceivedPosition = true;
+    // 症状1の修正（D15）は Transport に集約された: Transport は
+    // 「この owner の speak() 呼び出し後に届いた最初の isPlaying==true」から
+    // event を受理し、受理時点の activeOwner で刻印する（INV-T2）。
+    // controller は自 session の owner で刻印された event だけを state へ反映する。
+    _positionSubscription =
+        _transport.positionObservations.listen(_onPositionObserved);
+  }
 
-      // play()が未呼び出しのイベントは常に無視。play()呼び出し後も、この
-      // セッション自身の再生開始を示すisPlaying==trueイベントを受信するまでは
-      // 無視し、それを受信した時点で以降のイベントを通常どおり反映する。
-      if (!_acceptPositionUpdates &&
-          _hasCalledPlayForCurrentSession &&
-          data.isPlaying) {
-        _acceptPositionUpdates = true;
-      }
-      final appliedToState = _acceptPositionUpdates;
+  PlaybackOwnerKey _ownerOf(String sessionId) =>
+      PlaybackOwnerKey.transient(sessionId);
 
-      unawaited(DebugLogger.instance.logEvent('tts_position_received', {
-        'origin': 'quick_listen',
-        'sessionId': state.session?.id,
-        'charPosition': data.charPosition,
-        'isPlaying': data.isPlaying,
-        'ttsStatus': data.ttsStatus.name,
-        'isFirstEvent': isFirstEvent,
-        'appliedToState': appliedToState,
-      }));
+  void _onPositionObserved(PositionObservation observation) {
+    final data = observation.position;
+    final isFirstEvent = !_hasReceivedPosition;
+    _hasReceivedPosition = true;
 
-      if (!appliedToState) return;
-      state = state.copyWith(
-        highlightPosition: data.charPosition,
-        isPlaying: data.isPlaying,
-        ttsStatus: data.ttsStatus,
-      );
-    });
+    final session = state.session;
+    final appliedToState = session != null &&
+        observation.acceptedOwner != null &&
+        observation.acceptedOwner == _ownerOf(session.id);
+
+    unawaited(DebugLogger.instance.logEvent('tts_position_received', {
+      'origin': 'quick_listen',
+      'sessionId': session?.id,
+      'charPosition': data.charPosition,
+      'isPlaying': data.isPlaying,
+      'ttsStatus': data.ttsStatus.name,
+      'isFirstEvent': isFirstEvent,
+      'appliedToState': appliedToState,
+    }));
+
+    if (!appliedToState) return;
+    state = state.copyWith(
+      highlightPosition: data.charPosition,
+      isPlaying: data.isPlaying,
+      ttsStatus: data.ttsStatus,
+    );
   }
 
   /// 新しい共有テキストでセッションを開始する。
@@ -144,107 +133,168 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
   /// 置き換え前のセッションが再生中・一時停止中だった場合、明示的に停止しないと
   /// 画面上は新しいテキストを表示しているのに音声だけ旧テキストのまま再生され
   /// 続けてしまう（TtsAudioHandlerは単一インスタンスのため）。そのため置き換え時は
-  /// 必ずTTSと使用量カウントを止めてから新しいセッションを設定する。
+  /// 置換前セッション自身の owner で TTS を止めてから新しいセッションを設定する
+  /// （owner-gated: 別 owner の再生には作用しない）。
   void start(QuickListenSession session) {
     final previousSession = state.session;
     final replacedExisting = previousSession != null;
     if (replacedExisting) {
-      // ignore: discarded_futures
-      _ttsService.stop();
-      // v0.4.1 D14: 置換前セッション自身のownerで止める（固定文字列'quick-listen'
-      // ではなくsession-derived ownerに統一。CB-3 closure）。
-      // ignore: discarded_futures
-      _countUsage
-          .stopCounting(PlaybackOwnerKey.quickListen(previousSession.id));
+      unawaited(_transport.stop(_ownerOf(previousSession.id)));
     }
     // 直前のセッションに対するsave()が進行中でも、新セッションのsave()は
-    // それに相乗りせず必ず新しいSaveContentUseCase呼び出しを行うようにする。
+    // それに相乗りせず必ず新しい保存呼び出しを行うようにする。
     // （古いFutureの完了結果は_performSave側のセッションIDガードで無視される）
     _pendingSave = null;
+    _sessionSpeed = null;
     _hasReceivedPosition = false; // Observability: 新セッションの初回受信を判定し直す
-    _hasCalledPlayForCurrentSession = false;
-    _acceptPositionUpdates = false;
     state = QuickListenState(session: session);
+    final text = session.request.text;
     unawaited(DebugLogger.instance.logEvent('quick_listen_session_started', {
       'sessionId': session.id,
-      'charCount': session.text.length,
-      'sourceType': session.sourceType,
+      'charCount': text.length,
+      'sourceType': session.request.source?.sourceType,
       'replacedExistingSession': replacedExisting,
       'highlightPositionAtStart': state.highlightPosition,
-      // No.94 Observability: session.textはmain.dart _handleSharedPayload()で
+      // No.94 Observability: request.textはmain.dart _handleSharedPayload()で
       // 既にDart側`.trim()`済みの値（QuickListenScreen(initialText: text)経由）。
       // 比較ルール上、このpayloadHash(raw)は「Dart trimmed hash ↔ Quick Listen
       // raw/session hash」というpost-trim境界の比較に使う値であり、
       // native/plugin境界のprimary identity比較にはshare_classified等の
       // payloadHash(=trim前のDart classify結果)を使うこと（詳細は
       // ShareFingerprintのdocコメント参照）。
-      'payloadHash': ShareFingerprint.sha256Hex(session.text),
-      'trimmedPayloadHash': ShareFingerprint.sha256Hex(session.text.trim()),
+      'payloadHash': ShareFingerprint.sha256Hex(text),
+      'trimmedPayloadHash': ShareFingerprint.sha256Hex(text.trim()),
     }));
   }
 
   Future<void> play() async {
     final session = state.session;
-    if (session == null || session.text.trim().isEmpty) return;
+    if (session == null || session.request.text.trim().isEmpty) return;
     try {
-      final defaultSpeedStr =
-          await _settingsRepo.get(SettingKeys.defaultSpeed) ?? '1.0';
-      final speed = double.tryParse(defaultSpeedStr) ?? 1.0;
-      // ログ記録前にhighlightPositionをスナップショットし、CountTtsUsage・
-      // ログ・speak()の全てで同じ値を使う。await(_settingsRepo.get/logEvent)の
-      // 間にpositionStreamの更新でstateが変化しても、記録値と実際にspeak()へ
-      // 渡す値が食い違わないようにするため。
+      // 既存 defaultSpeed を再生時に尊重する（取得タイミングは従来どおり play 時）。
+      final speed = await _defaultsReader.readDefaultSpeed();
+      // ログ記録前にhighlightPositionをスナップショットし、ログ・speak()の
+      // 両方で同じ値を使う。await(readDefaultSpeed/logEvent)の間に
+      // position更新でstateが変化しても、記録値と実際にspeak()へ渡す値が
+      // 食い違わないようにするため。
       final startPosition = state.highlightPosition;
-      _countUsage.startCounting(
-        owner: PlaybackOwnerKey.quickListen(session.id),
-        totalChars: session.text.length,
-        startPosition: startPosition,
-      );
-      // Observability(症状1優先): play()直前のhighlightPositionと、
-      // speak()へ渡すstartPositionを記録する（本文は含めない）。
-      await DebugLogger.instance.logEvent('tts_play_requested', {
-        'origin': 'quick_listen',
-        'sessionId': session.id,
-        'highlightPositionAtPlayCall': startPosition,
-        'startPositionPassedToSpeak': startPosition,
-      });
-      // speak()呼び出し直前にゲートを開ける。これ以降に届くpositionStream
-      // イベントのうち、実際にisPlaying==trueとなる最初のイベント（=この
-      // セッション自身の再生開始）以降だけがstateへ反映されるようになる。
-      _hasCalledPlayForCurrentSession = true;
-      await _ttsService.speak(
-        text: session.text,
-        startPosition: startPosition,
-        speed: speed,
-      );
+      await _startFrom(session, startPosition, speed);
+      if (!mounted) return;
       state = state.copyWith(isPlaying: true);
     } catch (e) {
       await DebugLogger.instance.logEvent('error', {
         'context': 'quick_listen_play',
         'errorType': e.runtimeType.toString(),
       });
+      if (!mounted) return;
       state = state.copyWith(errorMessage: '再生に失敗しました: $e');
     }
   }
 
-  Future<void> pause() async {
-    final position = _getCurrentPosition();
-    final session = state.session;
-    if (session != null) {
-      await _countUsage.stopCounting(PlaybackOwnerKey.quickListen(session.id));
-    }
-    await _ttsService.pause();
-    state = state.copyWith(isPlaying: false, highlightPosition: position);
+  Future<void> _startFrom(
+      QuickListenSession session, int startPosition, double speed) {
+    if (state.session?.id == session.id) _sessionSpeed = speed;
+    return _transport.start(
+      _ownerOf(session.id),
+      session.request
+          .withStartPosition(startPosition)
+          .withVoice(PlaybackVoiceParams(speed: speed)),
+      accounting: const NoUsageAccounting(), // PD-1: Transientは計上しない
+      logFields: {
+        'origin': 'quick_listen',
+        'sessionId': session.id,
+        'highlightPositionAtPlayCall': startPosition,
+      },
+    );
   }
 
-  /// セッションを破棄する。TTSを止めるだけでDBへの変更は一切行わない。
-  Future<void> close() async {
+  Future<void> pause() async {
     final session = state.session;
-    if (session != null) {
-      await _countUsage.stopCounting(PlaybackOwnerKey.quickListen(session.id));
+    if (session == null) return;
+    final position = _transport.currentPosition;
+    final result = await _transport.pause(_ownerOf(session.id));
+    if (!mounted) return;
+    state = switch (result) {
+      CommandApplied() =>
+        state.copyWith(isPlaying: false, highlightPosition: position),
+      // 別 owner の位置を自 session へ取り込まない。
+      CommandIgnoredStaleOwner() => state.copyWith(isPlaying: false),
+    };
+  }
+
+  /// 先頭から再生（PD-2 / AC-05）。
+  Future<void> seekToStart() => seekToPosition(SeekMath.startPosition);
+
+  /// 本文タップ位置から再生（PD-2 / AC-06）。
+  ///
+  /// 停止中・一時停止中は位置だけを更新し、再生中は
+  /// stop(owner) → position=pos → start(pos) を行う。DB へは一切書かない。
+  Future<void> seekToPosition(int position) async {
+    final session = state.session;
+    if (session == null) return;
+    final target = SeekMath.clampTap(position, session.request.text.length);
+    if (!state.isPlaying) {
+      state = state.copyWith(highlightPosition: target);
+      return;
     }
-    await _ttsService.stop();
-    state = const QuickListenState();
+    final sessionId = session.id;
+    await _transport.stop(_ownerOf(sessionId));
+    // stale async effect gate: await 後は session id が一致する場合のみ反映する。
+    if (!mounted || state.session?.id != sessionId) return;
+    state = state.copyWith(highlightPosition: target, isPlaying: false);
+    try {
+      final speed = await _defaultsReader.readDefaultSpeed();
+      if (!mounted || state.session?.id != sessionId) return;
+      await _startFrom(session, target, speed);
+      if (!mounted || state.session?.id != sessionId) return;
+      state = state.copyWith(isPlaying: true);
+    } catch (e) {
+      await DebugLogger.instance.logEvent('error', {
+        'context': 'quick_listen_seek',
+        'errorType': e.runtimeType.toString(),
+      });
+      if (!mounted || state.session?.id != sessionId) return;
+      state = state.copyWith(errorMessage: '再生に失敗しました: $e');
+    }
+  }
+
+  /// セッションを破棄する（INV-T3）。DBへの変更は一切行わない。
+  ///
+  /// `expectedOwner = transient(sessionId)` の owner-safe teardown を行い、
+  /// owner 一致時は stop + resume fence（+ terminal close では media
+  /// notification の完全消去、NEW-Q1=A）を行う。別 owner が active な stale
+  /// close ではその owner へ一切触れない。teardown の結果に関わらず、
+  /// 対象 session の state はここで破棄する（別 session の state は壊さない）。
+  ///
+  /// [sessionId] 省略時は現在の session を対象にする。[reason] は
+  /// terminal close（×/system back）以外に、share 到着時の handoff
+  /// （[TeardownReason.shareTeardown]）で使う。
+  Future<void> close({
+    String? sessionId,
+    TeardownReason reason = TeardownReason.terminalClose,
+  }) async {
+    final targetId = sessionId ?? state.session?.id;
+    if (targetId != null) {
+      try {
+        await _transport.forceStopForTeardown(
+          expectedOwner: _ownerOf(targetId),
+          reason: reason,
+          notificationDisposition: reason == TeardownReason.terminalClose
+              ? NotificationDisposition.clearIfNoLiveOwner
+              : NotificationDisposition.handoff,
+        );
+      } catch (e) {
+        unawaited(DebugLogger.instance.logEvent('error', {
+          'context': 'quick_listen_close',
+          'errorType': e.runtimeType.toString(),
+        }));
+      }
+    }
+    if (!mounted) return;
+    final current = state.session;
+    if (current == null || current.id == targetId) {
+      state = const QuickListenState();
+    }
   }
 
   Future<Content?>? _pendingSave;
@@ -252,7 +302,7 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
   /// 通常Contentへ昇格保存する（DBへは初めてここで1回だけ書き込む）。
   ///
   /// 既に保存済みならその結果を即返す。保存処理が進行中の場合は新たに
-  /// SaveContentUseCaseを呼ばず、進行中のFutureをそのまま返す。
+  /// 保存を呼ばず、進行中のFutureをそのまま返す。
   /// （isSavingフラグだけで早期returnすると、ほぼ同時に呼ばれた2回目の
   /// 呼び出しが「まだ完了していない1回目の結果」を待たずにnullを返してしまい、
   /// concurrent double tapで片方の呼び出し元が保存成功を検知できなくなる。
@@ -265,26 +315,38 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
   }
 
   Future<Content?> _performSave(QuickListenSession session) async {
+    // 保存時点の snapshot を最初の await より前に同期で取る（§10）:
+    // Playing 中は Transport の現在位置（この session が owner の場合のみ）、
+    // それ以外は highlightPosition。
+    final owner = _ownerOf(session.id);
+    final position = state.isPlaying && _transport.activeOwner == owner
+        ? _transport.currentPosition
+        : state.highlightPosition;
+    final playedSpeed = _sessionSpeed;
     state = state.copyWith(isSaving: true, errorMessage: null);
     try {
-      final content = await _saveContent.execute(
-        body: session.text,
-        sourceType: session.sourceType,
-        title: session.title,
-      );
+      final speed = playedSpeed ?? await _defaultsReader.readDefaultSpeed();
+      final result = await _promotion.promote(PromotionInput(
+        request: session.request,
+        position: position,
+        speed: speed,
+      ));
+      final content = result.content;
       // 保存中に新しい共有でセッションが置き換わっていた場合、完了時に
       // 古いセッションの状態で現在の画面を上書きしない（DBへの保存自体は
       // 成功しているのでcontentはそのまま返す）。
-      if (state.session?.id == session.id) {
+      // 保存後も session は Transient のまま（Persistent へ reattach しない）。
+      if (mounted && state.session?.id == session.id) {
         state = state.copyWith(
           isSaving: false,
           savedContent: content,
-          session: session.copyWith(saved: true),
+          session: state.session!
+              .copyWith(saved: true, promotedContentId: content.id),
         );
       }
       return content;
     } catch (e) {
-      if (state.session?.id == session.id) {
+      if (mounted && state.session?.id == session.id) {
         state = state.copyWith(
           isSaving: false,
           errorMessage: '保存に失敗しました: $e',
@@ -300,8 +362,8 @@ class QuickListenViewModel extends StateNotifier<QuickListenState> {
 
   @override
   void dispose() {
+    // R-7: 共有 Transport は provider の所有物。自分の購読だけを外す。
     _positionSubscription?.cancel();
-    _countUsage.dispose();
     super.dispose();
   }
 }

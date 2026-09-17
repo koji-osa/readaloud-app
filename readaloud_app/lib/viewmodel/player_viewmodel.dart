@@ -918,7 +918,9 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   @override
   void dispose() {
     _playbackStateSubscription?.cancel();
-    _playbackGate.dispose();
+    // R-7: 共有 playback gate（および共有 position 購読）は app-shared provider
+    // の所有物。autoDispose される VM からは破棄しない（破棄は
+    // normalPlayerPlaybackGateProvider の ref.onDispose のみ）。
     super.dispose();
   }
 }

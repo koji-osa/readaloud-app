@@ -90,13 +90,18 @@ class PlayerRemovalTicket {
     required this.stopOutcome,
   });
 
-  factory PlayerRemovalTicket.empty({required String flowId}) =>
+  /// route 除去対象なし。external entry では route が無くても active playback
+  /// を retire するため、その停止結果を [stopOutcome] で運べる。
+  factory PlayerRemovalTicket.empty({
+    required String flowId,
+    PlaybackStopOutcome? stopOutcome,
+  }) =>
       PlayerRemovalTicket._(
         sessionId: null,
         contentId: null,
         claimId: null,
         flowId: flowId,
-        stopOutcome: PlaybackStopOutcome.notApplicable(),
+        stopOutcome: stopOutcome ?? PlaybackStopOutcome.notApplicable(),
       );
 
   factory PlayerRemovalTicket.forSession({
@@ -127,16 +132,18 @@ class PlayerRemovalTicket {
 /// Normal Player の usage-accounting 上の「所有者」。
 ///
 /// content identity でも Player session identity そのものでもない、専用の
-/// value type（D2）。Normal Player と Quick Listen が互いの所有権を誤って
-/// 主張できないよう、内部表現に `np:`/`ql:` prefix を持つ。
+/// value type（D2）。Normal Player と Transient（Quick Listen）が互いの所有権を
+/// 誤って主張できないよう、内部表現に `np:`/`tr:` prefix を持つ。
 class PlaybackOwnerKey {
   const PlaybackOwnerKey._(this._value);
 
   factory PlaybackOwnerKey.normalPlayer(String sessionId) =>
       PlaybackOwnerKey._('np:$sessionId');
 
-  factory PlaybackOwnerKey.quickListen(String sessionId) =>
-      PlaybackOwnerKey._('ql:$sessionId');
+  /// Transient session（Shared Player Core）の再生所有者。in-memory のみで
+  /// 永続値ではない。
+  factory PlaybackOwnerKey.transient(String sessionId) =>
+      PlaybackOwnerKey._('tr:$sessionId');
 
   final String _value;
 
