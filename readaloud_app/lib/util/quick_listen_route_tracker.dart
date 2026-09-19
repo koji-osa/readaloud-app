@@ -1,9 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../model/playback_request.dart';
+import '../model/quick_listen_session.dart';
 import '../ui/quick_listen/quick_listen_screen.dart';
 import 'debug_logger.dart';
+
+/// Transient route の追跡（Slice 6: main.dart の State field から app-shared
+/// provider へ移し、share 経路とアプリ内 Source entry が同じ instance を見る）。
+/// Pre-Commit M-1: UI に依存するため providers.dart ではなくここで定義する。
+final quickListenRouteTrackerProvider =
+    Provider<QuickListenRouteTracker>((ref) => QuickListenRouteTracker());
 
 /// 新しいtext shareが届くたびに直前のQuickListen routeを追跡し、
 /// Navigator stack上に残ったままにしない役割を持つ。
@@ -66,9 +75,30 @@ class QuickListenRouteTracker {
   ///
   /// 呼び出し元は、この呼び出しより前に[removeActiveQuickListen]で
   /// 旧routeの除去を済ませていること。
+  ///
+  /// Shared Player Core Slice 6: [openTransient] へ委譲する薄い互換 adapter。
+  /// 共有 text は `QuickListenSession.fromSharedText` で TextCleaner を1回だけ
+  /// 適用して request にする（INV-18）。
+  @Deprecated('Use openTransient(request:) via PlayerEntryCoordinator')
   void openQuickListen({
     required BuildContext context,
     required String text,
+    required String flowId,
+  }) {
+    openTransient(
+      context: context,
+      request: QuickListenSession.fromSharedText(text).request,
+      flowId: flowId,
+    );
+  }
+
+  /// 解決済みの Transient [request] を表示する新しい QuickListenScreen を push する。
+  ///
+  /// 呼び出し元は、この呼び出しより前に[removeActiveQuickListen]で
+  /// 旧routeの除去を済ませていること（`PlayerEntryCoordinator` が保証する）。
+  void openTransient({
+    required BuildContext context,
+    required PlaybackRequest request,
     required String flowId,
   }) {
     final navigator = Navigator.of(context);
@@ -78,7 +108,7 @@ class QuickListenRouteTracker {
       'flowId': flowId,
     }));
     final route = MaterialPageRoute<void>(
-      builder: (_) => QuickListenScreen(initialText: text),
+      builder: (_) => QuickListenScreen(initialRequest: request),
     );
     _activeRoute = route;
     unawaited(navigator.push(route).then((_) {

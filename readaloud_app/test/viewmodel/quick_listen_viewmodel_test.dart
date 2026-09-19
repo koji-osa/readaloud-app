@@ -8,12 +8,43 @@ import 'package:readaloud_app/model/tts_playback_position.dart';
 import 'package:readaloud_app/repository/content_repository.dart';
 import 'package:readaloud_app/repository/settings_repository.dart';
 import 'package:readaloud_app/repository/tts/tts_service.dart';
+import 'package:readaloud_app/model/playback_request.dart';
+import 'package:readaloud_app/model/setting.dart';
+import 'package:readaloud_app/model/playback_state.dart';
+import 'package:readaloud_app/repository/playback_repository.dart';
+import 'package:readaloud_app/usecase/content/library_promotion_service.dart';
 import 'package:readaloud_app/usecase/content/save_content_usecase.dart';
-import 'package:readaloud_app/usecase/tts/check_tts_limit_usecase.dart';
-import 'package:readaloud_app/usecase/tts/count_tts_usage_usecase.dart';
+import 'package:readaloud_app/usecase/playback/playback_defaults_reader.dart';
+import 'package:readaloud_app/usecase/playback/shared_playback_transport.dart';
 import 'package:readaloud_app/util/debug_logger.dart';
 import 'package:readaloud_app/util/share_fingerprint.dart';
 import 'package:readaloud_app/viewmodel/quick_listen_viewmodel.dart';
+
+/// Shared Player Core Slice 5: QuickListenSession は PlaybackRequest を canonical
+/// payload として持つ（旧 `QuickListenSession(text:, title:)` 構築の置換のみ）。
+QuickListenSession _session(String text, {String? title}) => QuickListenSession(
+      request: PlaybackRequest(
+        target: const TransientTarget(),
+        text: text,
+        title: title,
+        startPosition: 0,
+        source: const SourceDescriptor(sourceType: 'share'),
+      ),
+    );
+
+/// Shared Player Core Slice 4: QuickListenViewModel は共有 Transport 経由で
+/// 再生する（constructor 引数の更新のみ）。
+SharedPlaybackTransport _buildTransport(
+  TtsService ttsService, {
+  Stream<dynamic> positionStream = const Stream.empty(),
+  int Function()? currentPosition,
+}) =>
+    SharedPlaybackTransport(
+      tts: ttsService,
+      positionStream: positionStream,
+      currentPosition: currentPosition ?? () => 0,
+      resumeFence: _NoopResumeFence(),
+    );
 
 void main() {
   group('QuickListenViewModel', () {
@@ -26,30 +57,23 @@ void main() {
       contentRepo = _FakeContentRepository();
       settingsRepo = _FakeSettingsRepository();
       ttsService = _FakeTtsService();
-      final countUsage = CountTtsUsageUseCase(
-        settingsRepo: settingsRepo,
-        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
-      );
       viewModel = QuickListenViewModel(
-        ttsService: ttsService,
-        settingsRepo: settingsRepo,
-        saveContent: SaveContentUseCase(contentRepo),
-        countUsage: countUsage,
-        positionStream: const Stream.empty(),
-        getCurrentPosition: () => 0,
+        transport: _buildTransport(ttsService),
+        defaultsReader: SettingsPlaybackDefaultsReader(settingsRepo),
+        promotion: _promotion(contentRepo, settingsRepo),
       );
     });
 
     test('start()でセッションを開いただけではDBに一切書き込まれない', () {
-      viewModel.start(QuickListenSession(text: '共有された本文'));
+      viewModel.start(_session('共有された本文'));
 
       expect(viewModel.state.session, isNotNull);
-      expect(viewModel.state.session!.text, '共有された本文');
+      expect(viewModel.state.session!.request.text, '共有された本文');
       expect(contentRepo.saved, isEmpty);
     });
 
     test('play()は既存TtsServiceのspeakを呼ぶだけでDBには書き込まれない', () async {
-      viewModel.start(QuickListenSession(text: '読み上げるテキスト'));
+      viewModel.start(_session('読み上げるテキスト'));
 
       await viewModel.play();
 
@@ -59,7 +83,7 @@ void main() {
     });
 
     test('空文字・空白のみのテキストではplay()は何もしない（不正payloadの安全な処理）', () async {
-      viewModel.start(QuickListenSession(text: '   '));
+      viewModel.start(_session('   '));
 
       await viewModel.play();
 
@@ -67,7 +91,7 @@ void main() {
     });
 
     test('close()はTTSを止めてセッションを破棄するが、DBへは一切書き込まれない', () async {
-      viewModel.start(QuickListenSession(text: '本文'));
+      viewModel.start(_session('本文'));
       await viewModel.play();
 
       await viewModel.close();
@@ -78,7 +102,7 @@ void main() {
     });
 
     test('save()は通常Contentを1回だけ作成する（初回保存）', () async {
-      viewModel.start(QuickListenSession(text: '保存するテキスト', title: 'タイトル'));
+      viewModel.start(_session('保存するテキスト', title: 'タイトル'));
 
       final content = await viewModel.save();
 
@@ -90,7 +114,7 @@ void main() {
     });
 
     test('同一セッションからsave()を複数回呼んでも二重保存されない', () async {
-      viewModel.start(QuickListenSession(text: '保存するテキスト'));
+      viewModel.start(_session('保存するテキスト'));
 
       final first = await viewModel.save();
       final second = await viewModel.save();
@@ -102,7 +126,7 @@ void main() {
     test(
         'save()を同時(Future.wait)に呼んでも二重保存されず、両方の呼び出し元が同じ結果を受け取る'
         '（concurrent double tap対策）', () async {
-      viewModel.start(QuickListenSession(text: '同時タップされるテキスト'));
+      viewModel.start(_session('同時タップされるテキスト'));
 
       final results = await Future.wait([viewModel.save(), viewModel.save()]);
 
@@ -114,11 +138,11 @@ void main() {
     });
 
     test('save()実行中に新しい共有でセッションが置き換わっても、完了時に古いセッションの状態で上書きしない', () async {
-      viewModel.start(QuickListenSession(text: '保存対象だったテキストA'));
+      viewModel.start(_session('保存対象だったテキストA'));
       final pendingSave = viewModel.save();
 
       // 保存が完了する前（マイクロタスクが進む前）に新しい共有が届いたケースを再現
-      viewModel.start(QuickListenSession(text: 'B（Aの保存中に届いた新しい共有）'));
+      viewModel.start(_session('B（Aの保存中に届いた新しい共有）'));
 
       final result = await pendingSave;
 
@@ -127,13 +151,13 @@ void main() {
       expect(contentRepo.saved.single.body, '保存対象だったテキストA');
       // 画面には新しいセッションBがそのまま表示され続け、Aの保存完了によって
       // 上書きされていないこと（=表示中テキストが勝手に巻き戻らないこと）を確認
-      expect(viewModel.state.session!.text, 'B（Aの保存中に届いた新しい共有）');
+      expect(viewModel.state.session!.request.text, 'B（Aの保存中に届いた新しい共有）');
       expect(viewModel.state.hasSaved, isFalse);
     });
 
     test('save()が失敗した場合は何も保存されず、再試行(retry)で成功した時だけ1件保存される', () async {
       contentRepo.failNextSaves = 1;
-      viewModel.start(QuickListenSession(text: '失敗後にリトライするテキスト'));
+      viewModel.start(_session('失敗後にリトライするテキスト'));
 
       final failedResult = await viewModel.save();
       expect(failedResult, isNull);
@@ -149,20 +173,20 @@ void main() {
     });
 
     test('start()で既存セッションが再生中に新しい共有が来ると、旧セッションの音声を止めてから置き換える', () async {
-      viewModel.start(QuickListenSession(text: '旧テキスト'));
+      viewModel.start(_session('旧テキスト'));
       await viewModel.play();
       expect(ttsService.speakCalls, hasLength(1));
 
-      viewModel.start(QuickListenSession(text: '新しいテキスト'));
+      viewModel.start(_session('新しいテキスト'));
 
       // 旧セッションの音声がstop()されたことを確認（新テキストが混ざって聞こえる回帰を防止）
       expect(ttsService.stopCalls, greaterThanOrEqualTo(1));
-      expect(viewModel.state.session!.text, '新しいテキスト');
+      expect(viewModel.state.session!.request.text, '新しいテキスト');
       expect(viewModel.state.isPlaying, isFalse);
     });
 
     test('最初のstart()（既存セッションなし）ではTTSのstop()を余計に呼ばない', () {
-      viewModel.start(QuickListenSession(text: '最初のテキスト'));
+      viewModel.start(_session('最初のテキスト'));
 
       expect(ttsService.stopCalls, 0);
     });
@@ -181,17 +205,11 @@ void main() {
       settingsRepo = _FakeSettingsRepository();
       ttsService = _FakeTtsService();
       positionController = StreamController<dynamic>.broadcast();
-      final countUsage = CountTtsUsageUseCase(
-        settingsRepo: settingsRepo,
-        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
-      );
       viewModel = QuickListenViewModel(
-        ttsService: ttsService,
-        settingsRepo: settingsRepo,
-        saveContent: SaveContentUseCase(contentRepo),
-        countUsage: countUsage,
-        positionStream: positionController.stream,
-        getCurrentPosition: () => 0,
+        transport: _buildTransport(ttsService,
+            positionStream: positionController.stream),
+        defaultsReader: SettingsPlaybackDefaultsReader(settingsRepo),
+        promotion: _promotion(contentRepo, settingsRepo),
       );
     });
 
@@ -202,7 +220,7 @@ void main() {
 
     test('session start → position received → play requested の順でイベントが記録される',
         () async {
-      viewModel.start(QuickListenSession(text: '順序を検証するテキスト'));
+      viewModel.start(_session('順序を検証するテキスト'));
 
       // 直前セッション（Player等）から漏れてきた想定のpositionイベント
       positionController.add(const TtsPlaybackPosition(
@@ -233,7 +251,7 @@ void main() {
     test(
         'tts_position_receivedの本文断片(word等)は記録されない（DebugLoggerのforbidden key経由で保証）',
         () async {
-      viewModel.start(QuickListenSession(text: '本文が漏れないことを確認するテキスト'));
+      viewModel.start(_session('本文が漏れないことを確認するテキスト'));
       positionController.add(const TtsPlaybackPosition(
         charPosition: 5,
         isPlaying: true,
@@ -256,7 +274,7 @@ void main() {
       DebugLogger.testAwaitHook = () => logGate.future;
       addTearDown(() => DebugLogger.testAwaitHook = null);
 
-      viewModel.start(QuickListenSession(text: 'レース条件を検証するテキスト'));
+      viewModel.start(_session('レース条件を検証するテキスト'));
 
       final playFuture = viewModel.play();
       // play()内部がtts_play_requestedのlogEvent()（testAwaitHook）で
@@ -312,17 +330,11 @@ void main() {
       settingsRepo = _FakeSettingsRepository();
       ttsService = _FakeTtsService();
       positionController = StreamController<dynamic>.broadcast();
-      final countUsage = CountTtsUsageUseCase(
-        settingsRepo: settingsRepo,
-        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
-      );
       viewModel = QuickListenViewModel(
-        ttsService: ttsService,
-        settingsRepo: settingsRepo,
-        saveContent: SaveContentUseCase(contentRepo),
-        countUsage: countUsage,
-        positionStream: positionController.stream,
-        getCurrentPosition: () => 0,
+        transport: _buildTransport(ttsService,
+            positionStream: positionController.stream),
+        defaultsReader: SettingsPlaybackDefaultsReader(settingsRepo),
+        promotion: _promotion(contentRepo, settingsRepo),
       );
     });
 
@@ -338,7 +350,7 @@ void main() {
       // 直前の通常Playerがcharacter position=601でpauseしていた状態を模し、
       // 新しいQuick Listen sessionをstartする前に共有positionStream
       // (audioHandler.customState相当)へ601/stoppedが流れてくる状況を再現する。
-      viewModel.start(QuickListenSession(text: '新しく共有されたテキスト'));
+      viewModel.start(_session('新しく共有されたテキスト'));
       expect(viewModel.state.highlightPosition, 0,
           reason: '新セッション開始直後はposition=0を維持する');
 
@@ -367,7 +379,7 @@ void main() {
     });
 
     test('play()直後に旧stopped/pausedイベントが届いてもstateを汚染しない', () async {
-      viewModel.start(QuickListenSession(text: '再生直後の汚染を検証するテキスト'));
+      viewModel.start(_session('再生直後の汚染を検証するテキスト'));
 
       await viewModel.play();
       expect(ttsService.speakStartPositions.single, 0);
@@ -422,7 +434,7 @@ void main() {
       // 「現Quick Listen自身のcharPosition=0/playing」イベントが正しく
       // 反映されて最終的な表示・状態が0へ復旧することを確認する
       // （=旧Playerのpositionへ不正確定したまま留まる回帰がないことの証明）。
-      viewModel.start(QuickListenSession(text: '競合ケースを検証するテキスト'));
+      viewModel.start(_session('競合ケースを検証するテキスト'));
 
       // 旧Player position=601 → 新Quick Listen session start
       expect(viewModel.state.highlightPosition, 0);
@@ -487,7 +499,7 @@ void main() {
         'No.94 Observability: quick_listen_session_startedにpayloadHash/'
         'trimmedPayloadHashが記録され、本文そのものは含まれない', () async {
       const secret = 'SECRET_TEST_PAYLOAD_12345';
-      viewModel.start(QuickListenSession(text: secret));
+      viewModel.start(_session(secret));
 
       final line = DebugLogger.testSink!
           .firstWhere((l) => l.contains('event=quick_listen_session_started'));
@@ -521,71 +533,81 @@ void main() {
     late _FakeContentRepository contentRepo;
     late _FakeSettingsRepository settingsRepo;
     late _FakeTtsService ttsService;
-    late _SpyCountTtsUsageUseCase spyCountUsage;
+    late StreamController<dynamic> positionController;
+    late SharedPlaybackTransport transport;
     late QuickListenViewModel viewModel;
 
     setUp(() {
       contentRepo = _FakeContentRepository();
       settingsRepo = _FakeSettingsRepository();
       ttsService = _FakeTtsService();
-      spyCountUsage = _SpyCountTtsUsageUseCase(
-        settingsRepo: settingsRepo,
-        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
-      );
+      positionController = StreamController<dynamic>.broadcast();
+      transport = _buildTransport(ttsService,
+          positionStream: positionController.stream);
       viewModel = QuickListenViewModel(
-        ttsService: ttsService,
-        settingsRepo: settingsRepo,
-        saveContent: SaveContentUseCase(contentRepo),
-        countUsage: spyCountUsage,
-        positionStream: const Stream.empty(),
-        getCurrentPosition: () => 0,
+        transport: transport,
+        defaultsReader: SettingsPlaybackDefaultsReader(settingsRepo),
+        promotion: _promotion(contentRepo, settingsRepo),
       );
+    });
+
+    tearDown(() async {
+      await positionController.close();
     });
 
     test(
-        '旧セッションを新しい共有で置き換えると、固定文字列(\'quick-listen\')ではなく'
-        '置換前セッション自身のownerでstopCountingが呼ばれ、新セッションのownerと'
-        '混同されない（CB-3回帰防止）', () async {
-      viewModel.start(QuickListenSession(text: 'セッションA'));
+        '旧セッションを新しい共有で置き換えると、置換前セッション自身のowner'
+        '（PlaybackOwnerKey.transient）でTTSが止まり、新セッションのownerと'
+        '混同されない。Transientの再生はusageへ計上されない（PD-1）', () async {
+      viewModel.start(_session('セッションA'));
       await viewModel.play();
       final sessionA = viewModel.state.session!;
 
-      expect(spyCountUsage.startCalls,
-          [PlaybackOwnerKey.quickListen(sessionA.id)]);
+      expect(transport.activeOwner, PlaybackOwnerKey.transient(sessionA.id));
 
-      viewModel.start(QuickListenSession(text: 'セッションBに置き換え'));
+      viewModel.start(_session('セッションBに置き換え'));
       final sessionB = viewModel.state.session!;
 
       expect(sessionB.id, isNot(sessionA.id));
-      expect(
-          spyCountUsage.stopCalls, [PlaybackOwnerKey.quickListen(sessionA.id)],
-          reason: '置換前セッション自身のownerでstopCountingが呼ばれる（固定文字列ownerへの'
-              '回帰や、新セッションownerとの取り違えが無いこと）');
+      expect(ttsService.stopCalls, 1, reason: '置換前セッション自身のownerでTTSが止まる');
 
       await viewModel.play();
-      expect(spyCountUsage.startCalls, [
-        PlaybackOwnerKey.quickListen(sessionA.id),
-        PlaybackOwnerKey.quickListen(sessionB.id),
-      ]);
+      expect(transport.activeOwner, PlaybackOwnerKey.transient(sessionB.id));
+      positionController.add(const TtsPlaybackPosition(
+        charPosition: 5,
+        isPlaying: true,
+        ttsStatus: TtsStatus.playing,
+      ));
+      await Future.delayed(Duration.zero);
 
       await viewModel.pause();
-      expect(spyCountUsage.stopCalls.last,
-          PlaybackOwnerKey.quickListen(sessionB.id),
+      expect(ttsService.pauseCalls, 1,
           reason: 'pause()もsession-derived ownerを使う');
 
       await viewModel.close();
-      expect(spyCountUsage.stopCalls.last,
-          PlaybackOwnerKey.quickListen(sessionB.id),
+      expect(ttsService.stopCalls, 2,
           reason: 'close()もsession-derived ownerを使う');
+
+      expect(await settingsRepo.get(SettingKeys.ttsUsedChars), isNull,
+          reason: 'PD-1: Transientの再生はtts_used_charsを更新しない');
     });
 
-    test('セッション未設定のままpause()/close()を呼んでもstopCountingは呼ばれない（D14ガード）', () async {
+    test('セッション未設定のままpause()/close()を呼んでもTTS・usageへ作用しない（D14ガード）', () async {
       await viewModel.pause();
       await viewModel.close();
 
-      expect(spyCountUsage.stopCalls, isEmpty);
+      expect(ttsService.pauseCalls, 0);
+      expect(ttsService.stopCalls, 0);
+      expect(await settingsRepo.get(SettingKeys.ttsUsedChars), isNull);
     });
   });
+}
+
+class _NoopResumeFence implements PlaybackResumeFence {
+  @override
+  Future<void> discardResumeState({
+    required NotificationDisposition notificationDisposition,
+  }) async {}
 }
 
 class _FakeTtsService implements TtsService {
@@ -622,40 +644,6 @@ class _FakeTtsService implements TtsService {
 
   @override
   Future<void> dispose() async {}
-}
-
-/// CB-3回帰防止用のspy。CountTtsUsageUseCaseは具象クラスのため、
-/// startCounting/stopCountingへ渡されたownerを記録するためだけに
-/// override + super呼び出しで実体験みする（実際のflushロジック自体は
-/// 変更しない）。
-class _SpyCountTtsUsageUseCase extends CountTtsUsageUseCase {
-  _SpyCountTtsUsageUseCase({
-    required super.settingsRepo,
-    required super.checkLimit,
-  });
-
-  final List<PlaybackOwnerKey> startCalls = [];
-  final List<PlaybackOwnerKey> stopCalls = [];
-
-  @override
-  void startCounting({
-    required PlaybackOwnerKey owner,
-    required int totalChars,
-    required int startPosition,
-  }) {
-    startCalls.add(owner);
-    super.startCounting(
-      owner: owner,
-      totalChars: totalChars,
-      startPosition: startPosition,
-    );
-  }
-
-  @override
-  Future<void> stopCounting(PlaybackOwnerKey owner) {
-    stopCalls.add(owner);
-    return super.stopCounting(owner);
-  }
 }
 
 class _FakeSettingsRepository implements SettingsRepository {
@@ -708,4 +696,34 @@ class _FakeContentRepository implements ContentRepository {
   @override
   Future<void> delete(String id) async =>
       throw UnimplementedError('Quick Listenでは使用されないはず');
+}
+
+/// Shared Player Core Slice 7a: 保存は LibraryPromotionService 経由（構築変更のみ）。
+LibraryPromotionService _promotion(
+        ContentRepository contentRepo, SettingsRepository settingsRepo) =>
+    LibraryPromotionService(
+      saveContent: SaveContentUseCase(contentRepo),
+      playbackRepo: _InMemoryPlaybackRepository(),
+      defaultsReader: SettingsPlaybackDefaultsReader(settingsRepo),
+    );
+
+class _InMemoryPlaybackRepository implements PlaybackRepository {
+  final Map<String, PlaybackState> _store = {};
+
+  @override
+  Future<PlaybackState?> getByContentId(String contentId) async =>
+      _store[contentId];
+
+  @override
+  Future<void> save(PlaybackState state) async =>
+      _store[state.contentId] = state;
+
+  @override
+  Future<void> resetAbRepeat(String contentId) async {}
+
+  @override
+  Future<void> resetAllAbRepeat() async {}
+
+  @override
+  Future<void> delete(String contentId) async => _store.remove(contentId);
 }

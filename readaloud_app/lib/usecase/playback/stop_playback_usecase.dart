@@ -1,8 +1,9 @@
 import '../../model/normal_player_session.dart';
+import '../../model/playback_request.dart';
 import '../../repository/playback_repository.dart';
 import '../../repository/tts/tts_service.dart';
-import '../../model/playback_state.dart';
 import '../tts/count_tts_usage_usecase.dart';
+import 'playback_persistence_policy.dart';
 import 'save_playback_state_usecase.dart';
 
 class StopPlaybackUseCase {
@@ -77,34 +78,21 @@ class StopPlaybackUseCase {
       ttsErr = e.runtimeType.toString();
     }
 
-    // 3) 再生位置保存も独立に試行する。
-    bool posOk = true;
-    String? posErr;
-    try {
-      final existing = await _playbackRepo.getByContentId(contentId) ??
-          PlaybackState(contentId: contentId);
-      final totalChars = existing.progressPct > 0
-          ? (currentPosition / (existing.progressPct / 100)).round()
-          : 1;
-      final progressPct =
-          (currentPosition / totalChars * 100).clamp(0.0, 100.0);
-      await _saveState.execute(
-        contentId: contentId,
-        position: currentPosition,
-        progressPct: progressPct,
-      );
-    } catch (e) {
-      posOk = false;
-      posErr = e.runtimeType.toString();
-    }
+    // 3) 再生位置保存も独立に試行する（Shared Player Core Slice 2:
+    // PersistentPersistencePolicy へ委譲。policy は例外を投げず結果を返す）。
+    final positionResult = await PersistentPersistencePolicy(
+      target: PersistentTarget.ofRegisteredSessionContentId(contentId),
+      playbackRepo: _playbackRepo,
+      savePlaybackState: _saveState,
+    ).persistStopPosition(position: currentPosition);
 
     return PlaybackStopOutcome(
       ttsStopSucceeded: ttsOk,
       usageFlushSucceeded: usageOk,
-      positionSaveSucceeded: posOk,
+      positionSaveSucceeded: positionResult.succeeded,
       ttsStopErrorType: ttsErr,
       usageFlushErrorType: usageErr,
-      positionSaveErrorType: posErr,
+      positionSaveErrorType: positionResult.errorType,
     );
   }
 }

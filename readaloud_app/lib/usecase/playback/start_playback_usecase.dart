@@ -1,16 +1,19 @@
 import 'dart:async';
 import '../../model/normal_player_session.dart';
+import '../../model/playback_request.dart';
 import '../../model/tts_playback_position.dart';
 import '../../repository/content_repository.dart';
 import '../../repository/playback_repository.dart';
 import '../../repository/tts/tts_service.dart';
-import '../../model/playback_state.dart';
 import '../tts/count_tts_usage_usecase.dart';
 import '../../util/debug_logger.dart';
+import 'persistent_playback_resolver.dart';
 
 class StartPlaybackUseCase {
-  final ContentRepository _contentRepo;
-  final PlaybackRepository _playbackRepo;
+  // Shared Player Core Slice 1: DB 読込（Content / PlaybackState / status 更新）は
+  // PersistentPlaybackResolver へ分離し、execute() は resolve + executeRequest の
+  // 合成になった（公開シグネチャ・外部観測は不変）。
+  final PersistentPlaybackResolver _resolver;
   // TtsAudioHandler（具象クラス）ではなく position stream を直接受け取る。
   // QuickListenViewModel の positionStream 注入と同じ方式にすることで、
   // fake stream によるテスト容易性を確保する（audio_service の重量な
@@ -35,25 +38,28 @@ class StartPlaybackUseCase {
     required Stream<dynamic> positionStream,
     required TtsService ttsService,
     required CountTtsUsageUseCase countUsage,
-  })  : _contentRepo = contentRepo,
-        _playbackRepo = playbackRepo,
+  })  : _resolver = PersistentPlaybackResolver(
+          contentRepo: contentRepo,
+          playbackRepo: playbackRepo,
+        ),
         _positionStream = positionStream,
         _ttsService = ttsService,
         _countUsage = countUsage;
 
   Future<void> execute(String contentId,
       {required PlaybackOwnerKey owner}) async {
-    final content = await _contentRepo.getById(contentId);
-    if (content == null) throw Exception('コンテンツが見つかりません: $contentId');
+    final request = await _resolver.resolveForStart(contentId);
+    await executeRequest(request, owner: owner);
+  }
 
-    // 再生状態を取得（なければ初期値で作成）
-    final state = await _playbackRepo.getByContentId(contentId) ??
-        PlaybackState(contentId: contentId);
-
-    // コンテンツのステータスを「読書中」に更新
-    await _contentRepo.update(
-      content.copyWith(status: 'in_progress'),
-    );
+  /// 解決済み [request]（Persistent）で再生を開始する。
+  Future<void> executeRequest(PlaybackRequest request,
+      {required PlaybackOwnerKey owner}) async {
+    final target = request.target;
+    final contentId = switch (target) {
+      PersistentTarget(:final contentId) => contentId,
+      TransientTarget() => null,
+    };
 
     _hasCalledSpeakForCurrentExecute = false;
     _acceptPositionUpdates = false;
@@ -74,15 +80,15 @@ class StartPlaybackUseCase {
     // TTS使用量カウント開始
     _countUsage.startCounting(
       owner: owner,
-      totalChars: content.charCount,
-      startPosition: state.position,
+      totalChars: request.text.length,
+      startPosition: request.startPosition,
     );
 
     // Observability: play()相当の直前状態を記録（本文は含めない）
     await DebugLogger.instance.logEvent('tts_play_requested', {
       'origin': 'player',
       'contentId': contentId,
-      'startPositionPassedToSpeak': state.position,
+      'startPositionPassedToSpeak': request.startPosition,
     });
 
     // 読み上げ開始直前にゲートを開ける。これ以降に届くcustomStateイベントの
@@ -90,12 +96,12 @@ class StartPlaybackUseCase {
     // 再生開始）以降だけがusage計測へ反映されるようになる。
     _hasCalledSpeakForCurrentExecute = true;
     await _ttsService.speak(
-      text: content.body,
-      startPosition: state.position,
-      speed: state.speed,
-      pitch: state.pitch,
-      volume: state.volume,
-      voiceId: state.voiceId,
+      text: request.text,
+      startPosition: request.startPosition,
+      speed: request.voice.speed,
+      pitch: request.voice.pitch,
+      volume: request.voice.volume,
+      voiceId: request.voice.voiceId,
     );
   }
 

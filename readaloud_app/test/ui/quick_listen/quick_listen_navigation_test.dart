@@ -9,9 +9,12 @@ import 'package:readaloud_app/repository/content_repository.dart';
 import 'package:readaloud_app/repository/settings_repository.dart';
 import 'package:readaloud_app/repository/tts/tts_service.dart';
 import 'package:readaloud_app/ui/quick_listen/quick_listen_screen.dart';
+import 'package:readaloud_app/model/playback_state.dart';
+import 'package:readaloud_app/repository/playback_repository.dart';
+import 'package:readaloud_app/usecase/content/library_promotion_service.dart';
 import 'package:readaloud_app/usecase/content/save_content_usecase.dart';
-import 'package:readaloud_app/usecase/tts/check_tts_limit_usecase.dart';
-import 'package:readaloud_app/usecase/tts/count_tts_usage_usecase.dart';
+import 'package:readaloud_app/usecase/playback/playback_defaults_reader.dart';
+import 'package:readaloud_app/usecase/playback/shared_playback_transport.dart';
 import 'package:readaloud_app/util/debug_logger.dart';
 import 'package:readaloud_app/util/quick_listen_route_tracker.dart';
 import 'package:readaloud_app/viewmodel/quick_listen_viewmodel.dart';
@@ -213,28 +216,31 @@ void main() {
 QuickListenViewModel _buildTestViewModel() {
   final settingsRepo = _FakeSettingsRepository();
   return _TestQuickListenViewModel(
-    ttsService: _FakeTtsService(),
-    settingsRepo: settingsRepo,
-    saveContent: SaveContentUseCase(_FakeContentRepository()),
-    countUsage: CountTtsUsageUseCase(
-      settingsRepo: settingsRepo,
-      checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+    transport: SharedPlaybackTransport(
+      tts: _FakeTtsService(),
+      positionStream: const Stream.empty(),
+      currentPosition: () => 0,
+      resumeFence: _NoopResumeFence(),
     ),
-    positionStream: const Stream.empty(),
-    getCurrentPosition: () => 0,
+    defaultsReader: SettingsPlaybackDefaultsReader(settingsRepo),
+    promotion: _promotion(_FakeContentRepository(), settingsRepo),
   );
+}
+
+class _NoopResumeFence implements PlaybackResumeFence {
+  @override
+  Future<void> discardResumeState({
+    required NotificationDisposition notificationDisposition,
+  }) async {}
 }
 
 /// start()の同期stateセットだけを1microtask遅延させるテスト専用subclass。
 /// 理由は本ファイル冒頭の注記を参照。close()等の他の挙動は一切変更しない。
 class _TestQuickListenViewModel extends QuickListenViewModel {
   _TestQuickListenViewModel({
-    required super.ttsService,
-    required super.settingsRepo,
-    required super.saveContent,
-    required super.countUsage,
-    required super.positionStream,
-    required super.getCurrentPosition,
+    required super.transport,
+    required super.defaultsReader,
+    required super.promotion,
   });
 
   @override
@@ -369,4 +375,34 @@ class _FakeContentRepository implements ContentRepository {
 
   @override
   Future<void> delete(String id) async {}
+}
+
+/// Shared Player Core Slice 7a: 保存は LibraryPromotionService 経由（構築変更のみ）。
+LibraryPromotionService _promotion(
+        ContentRepository contentRepo, SettingsRepository settingsRepo) =>
+    LibraryPromotionService(
+      saveContent: SaveContentUseCase(contentRepo),
+      playbackRepo: _InMemoryPlaybackRepository(),
+      defaultsReader: SettingsPlaybackDefaultsReader(settingsRepo),
+    );
+
+class _InMemoryPlaybackRepository implements PlaybackRepository {
+  final Map<String, PlaybackState> _store = {};
+
+  @override
+  Future<PlaybackState?> getByContentId(String contentId) async =>
+      _store[contentId];
+
+  @override
+  Future<void> save(PlaybackState state) async =>
+      _store[state.contentId] = state;
+
+  @override
+  Future<void> resetAbRepeat(String contentId) async {}
+
+  @override
+  Future<void> resetAllAbRepeat() async {}
+
+  @override
+  Future<void> delete(String contentId) async => _store.remove(contentId);
 }

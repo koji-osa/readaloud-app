@@ -1,47 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../model/player_capabilities.dart';
+import '../../model/playback_request.dart';
 import '../../model/quick_listen_session.dart';
 import '../../providers.dart';
-import '../../repository/impl/content_repository_impl.dart';
-import '../../repository/impl/settings_repository_impl.dart';
-import '../../usecase/content/save_content_usecase.dart';
-import '../../usecase/tts/check_tts_limit_usecase.dart';
-import '../../usecase/tts/count_tts_usage_usecase.dart';
-import '../../viewmodel/quick_listen_viewmodel.dart';
+import '../../util/auto_title.dart';
 import '../home/home_screen.dart';
 import '../player/widgets/highlight_text.dart';
+import '../player/widgets/playback_controls.dart';
 import '../../util/debug_logger.dart';
 
-final quickListenViewModelProvider = StateNotifierProvider.autoDispose<
-    QuickListenViewModel, QuickListenState>((ref) {
-  final audioHandler = ref.read(audioHandlerProvider);
-  final settingsRepo = SettingsRepositoryImpl();
-  final checkTtsLimit = CheckTtsLimitUseCase(settingsRepo: settingsRepo);
-  final countTtsUsage = CountTtsUsageUseCase(
-    settingsRepo: settingsRepo,
-    checkLimit: checkTtsLimit,
-  );
-  return QuickListenViewModel(
-    ttsService: audioHandler,
-    settingsRepo: settingsRepo,
-    saveContent: SaveContentUseCase(ContentRepositoryImpl()),
-    countUsage: countTtsUsage,
-    positionStream: audioHandler.customState,
-    getCurrentPosition: () => audioHandler.currentPosition,
-  );
-});
+// Pre-Commit M-1: provider 定義は provider 層（providers.dart）へ移した。
+// 既存の import 経路（`quick_listen_screen.dart` から provider を参照する側）を
+// 保つため re-export だけを残す（UI → provider の一方向依存）。
+export '../../providers.dart' show quickListenViewModelProvider;
 
-/// 共有された通常テキストをDBに保存せずその場で読み上げるための画面。
-/// 「保存」を押すまでContent DBには一切書き込まれない。
+/// 共有された通常テキスト等をDBに保存せずその場で読み上げるTransient Player画面。
+/// 「Libraryに保存」を押すまでContent DBには一切書き込まれない。
 class QuickListenScreen extends ConsumerStatefulWidget {
-  final String initialText;
+  /// 共有テキスト（生）。[initialRequest] が無い場合に TextCleaner を1回だけ適用する。
+  final String? initialText;
   final String? initialTitle;
+
+  /// 解決済みの Transient 再生要求（`openTransient(request:)` 経路）。
+  final PlaybackRequest? initialRequest;
 
   const QuickListenScreen({
     super.key,
-    required this.initialText,
+    this.initialText,
     this.initialTitle,
-  });
+    this.initialRequest,
+  }) : assert(initialText != null || initialRequest != null);
 
   @override
   ConsumerState<QuickListenScreen> createState() => _QuickListenScreenState();
@@ -49,6 +38,7 @@ class QuickListenScreen extends ConsumerStatefulWidget {
 
 class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
   String? _sessionId;
+  bool _closing = false;
 
   @override
   void initState() {
@@ -56,10 +46,13 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
     // ref.read()はinitState内でも安全（ref.watchのみ避ければよい）。
     // postFrameCallbackを介さないことで、セッション未設定の空表示が一瞬
     // 出てしまう問題も避けられる。
-    final session = QuickListenSession.fromSharedText(
-      widget.initialText,
-      title: widget.initialTitle,
-    );
+    final request = widget.initialRequest;
+    final session = request != null
+        ? QuickListenSession(request: request)
+        : QuickListenSession.fromSharedText(
+            widget.initialText!,
+            title: widget.initialTitle,
+          );
     _sessionId = session.id;
     ref.read(quickListenViewModelProvider.notifier).start(session);
     DebugLogger.instance.logEvent('quick_listen_screen_mounted', {
@@ -75,9 +68,23 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
     super.dispose();
   }
 
+  /// terminal close（× / system back / predictive back）。INV-T3:
+  /// この画面自身の session を expectedOwner とする owner-safe teardown の
+  /// 結果に関わらず、自分の route だけを identity-safe に閉じる。
   Future<void> _close() async {
-    await ref.read(quickListenViewModelProvider.notifier).close();
-    if (mounted) Navigator.of(context).pop();
+    if (_closing) return;
+    _closing = true;
+    await ref
+        .read(quickListenViewModelProvider.notifier)
+        .close(sessionId: _sessionId);
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route == null) return;
+    if (route.isCurrent) {
+      Navigator.of(context).pop();
+    } else if (route.isActive) {
+      Navigator.of(context).removeRoute(route);
+    }
   }
 
   Future<void> _save() async {
@@ -87,7 +94,7 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
     ref.read(contentListViewModelProvider.notifier).loadContents();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('ReadAloudに保存しました'),
+        content: Text('Libraryに保存しました'),
         backgroundColor: Color(0xFF7C5CBF),
       ),
     );
@@ -98,9 +105,13 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
     final state = ref.watch(quickListenViewModelProvider);
     final vm = ref.read(quickListenViewModelProvider.notifier);
     final session = state.session;
+    final request = session?.request;
+    // capability の判定はこの composition root でだけ行う（PD-2）。
+    const caps = PlayerCapabilities.transientPhase1;
 
     ref.listen(quickListenViewModelProvider, (prev, next) {
-      if (next.errorMessage != null && next.errorMessage != prev?.errorMessage) {
+      if (next.errorMessage != null &&
+          next.errorMessage != prev?.errorMessage) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(next.errorMessage!),
@@ -111,74 +122,98 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
       }
     });
 
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 18, 0),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Color(0xFF8888AA)),
-                    onPressed: _close,
-                  ),
-                  const Expanded(
-                    child: Text(
-                      'Quick Listen',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFFF0F0F8),
+    // PD-3: Sourceタイトル、無ければ既存の自動タイトル（「Quick Listen」は表示しない）。
+    final heading = request == null
+        ? ''
+        : request.title ??
+            autoTitleFromBody(
+                request.text, request.source?.sourceType ?? 'share');
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _close();
+      },
+      child: Scaffold(
+        body: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 18, 0),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Color(0xFF8888AA)),
+                      onPressed: _close,
+                    ),
+                    Expanded(
+                      child: Text(
+                        heading,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFF0F0F8),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: HighlightText(
-                  text: session?.text ?? '',
-                  highlightPosition: state.highlightPosition,
+                  ],
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Row(
-                children: [
-                  Expanded(
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: HighlightText(
+                    text: request?.text ?? '',
+                    highlightPosition: state.highlightPosition,
+                    onTap: caps.tapToSeek && session != null
+                        ? (position) => vm.seekToPosition(position)
+                        : null,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: PlaybackControls(
+                  isPlaying: state.isPlaying,
+                  speed: request?.voice.speed ?? 1.0,
+                  onPlay: session == null ? () {} : vm.play,
+                  onPause: session == null ? () {} : vm.pause,
+                  onSeekToStart: caps.seekToStart && session != null
+                      ? vm.seekToStart
+                      : null,
+                  // PD-2: 以下は Transient Phase 1 では表示しない。
+                  onStop: null,
+                  onSeekToEnd: null,
+                  onRewind: null,
+                  onFastForward: null,
+                  onSpeedChange: null,
+                  onVoiceChange: null,
+                ),
+              ),
+              if (caps.libraryPromotion)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: SizedBox(
+                    width: double.infinity,
                     child: OutlinedButton(
-                      onPressed: state.hasSaved || state.isSaving || session == null
-                          ? null
-                          : _save,
+                      onPressed:
+                          state.hasSaved || state.isSaving || session == null
+                              ? null
+                              : _save,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF9B6FE0),
                         side: const BorderSide(color: Color(0xFF3A3A55)),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
-                      child: Text(state.hasSaved ? '保存済み' : 'ReadAloudに保存'),
+                      child: Text(state.hasSaved ? '保存済み' : 'Libraryに保存'),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  IconButton(
-                    iconSize: 56,
-                    color: const Color(0xFF7C5CBF),
-                    icon: Icon(
-                      state.isPlaying
-                          ? Icons.pause_circle_filled
-                          : Icons.play_circle_filled,
-                    ),
-                    onPressed: session == null
-                        ? null
-                        : (state.isPlaying ? vm.pause : vm.play),
-                  ),
-                ],
-              ),
-            ),
-          ],
+                ),
+            ],
+          ),
         ),
       ),
     );
