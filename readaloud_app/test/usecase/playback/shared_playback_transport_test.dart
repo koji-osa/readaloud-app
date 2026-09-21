@@ -3,14 +3,21 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/model/normal_player_session.dart';
 import 'package:readaloud_app/model/playback_request.dart';
+import 'package:readaloud_app/model/setting.dart';
 import 'package:readaloud_app/model/tts_playback_position.dart';
+import 'package:readaloud_app/repository/settings_repository.dart';
 import 'package:readaloud_app/repository/tts/tts_service.dart';
 import 'package:readaloud_app/usecase/playback/playback_usage_accounting.dart';
 import 'package:readaloud_app/usecase/playback/shared_playback_transport.dart';
+import 'package:readaloud_app/usecase/tts/check_tts_limit_usecase.dart';
+import 'package:readaloud_app/usecase/tts/count_tts_usage_usecase.dart';
 import 'package:readaloud_app/util/debug_logger.dart';
 
 // Shared Player Core Slice 3: SharedPlaybackTransport の Core unit test
 // （Detailed Design v1.2 FINAL §16 T-C1 / T-C2 / T-C3a / T-C3b / T-C3c / T-C3e）。
+//
+// Playback Session Lifecycle Hardening Slice 3: DA-2 adoption 追加
+// （Detailed Design v1.2 FINAL §15.2 T14-T18）。
 void main() {
   late List<String> log;
   late _FakeTts tts;
@@ -21,9 +28,19 @@ void main() {
 
   final ownerA = PlaybackOwnerKey.normalPlayer('A');
   final ownerB = PlaybackOwnerKey.normalPlayer('B');
+  final ownerC = PlaybackOwnerKey.normalPlayer('C');
+  final ownerD = PlaybackOwnerKey.normalPlayer('D');
 
   PlaybackRequest req(String text, {int start = 0}) => PlaybackRequest(
       target: const TransientTarget(), text: text, startPosition: start);
+
+  PlaybackRequest persistentReq(String text,
+          {int start = 0, String contentId = 'A'}) =>
+      PlaybackRequest(
+        target: PersistentTarget.ofRegisteredSessionContentId(contentId),
+        text: text,
+        startPosition: start,
+      );
 
   setUp(() {
     DebugLogger.testSink = [];
@@ -371,6 +388,341 @@ void main() {
       expect(transport.activeRequestForDebug, isNull);
     });
   });
+
+  group('Detailed Design v1.2 FINAL §8.2/§12/§15.2: adoptActivePersistent (DA-2)',
+      () {
+    test('T16 [NR-3]: PersistentTargetはcontentIdでvalue equality、TransientTargetは不変',
+        () {
+      final a1 = PersistentTarget.ofRegisteredSessionContentId('A');
+      final a2 = PersistentTarget.ofRegisteredSessionContentId('A');
+      final b = PersistentTarget.ofRegisteredSessionContentId('B');
+      expect(a1, equals(a2));
+      expect(a1.hashCode, a2.hashCode);
+      expect(a1, isNot(equals(b)));
+
+      // TransientTargetはidentity比較のまま（INV-13: adoptActivePersistentの
+      // 型が PersistentTarget のみを受け付けるため、Transient は型レベルで除外
+      // されており、instance equalityへの変更は不要かつ行われていない）。
+      const t1 = TransientTarget();
+      expect(identical(t1, t1), isTrue,
+          reason: 'TransientTargetは既定のidentity比較のまま'
+              '（==/hashCodeへの変更は行っていない）');
+
+      // INV-13 型レベル回帰防止（Independent Pre-Commit Review Finding 2）。
+      // adoptActivePersistent の target 引数が PersistentTarget から
+      // PlaybackTarget（＝TransientTargetも受理可能）へ将来widenされていない
+      // ことを、tear-offの宣言された関数型に対する反変性チェックで検証する。
+      //
+      // このrepositoryにはcompile-fail fixture用の追加ツール/依存が無いため
+      // （新規依存はこのテストのためだけに追加しない）、実際のコンパイル
+      // エラーの代わりに、宣言された関数シグネチャに対するruntime `is`
+      // チェックで代替する — これがこの環境で利用可能な最も強い
+      // type-signature assertion である。
+      //
+      // 反変性の根拠: パラメータをより広い型（PlaybackTarget）で受け付ける
+      // 関数は、より狭い型（PersistentTarget）だけを受け付ける関数の代わりに
+      // 安全に使える（＝ is関係が成立する）。逆に、狭い型だけを受け付ける
+      // 実際の関数が、広い型を受け付けるフリをすること（＝ is関係が成立
+      // すること）は型システム上できない。したがって target が将来
+      // PlaybackTarget へwidenされると、下の判定は true に反転し、
+      // isFalse assertion が失敗して回帰を検知する。
+      final isWidenedToPlaybackTarget = transport.adoptActivePersistent
+          is Future<ActivePlaybackSnapshot?> Function({
+        required PlaybackTarget target,
+        required PlaybackOwnerKey newOwner,
+        required PlaybackUsageAccounting accounting,
+      });
+      expect(isWidenedToPlaybackTarget, isFalse,
+          reason: 'adoptActivePersistentのtargetパラメータがPersistentTargetより'
+              '広い型（PlaybackTarget、＝TransientTargetも受理可能）へwidenされて'
+              'いないことを検証する（INV-13の型レベル回帰防止）。widenされると'
+              'この判定はtrueへ反転し、ここで失敗する。');
+    });
+
+    test(
+        'H1/T15a: 同一owner(np:S2)への重複adoptionは完全no-op（flush無し・'
+        'onPlaybackStarted無し・TTS無し・同一snapshotを返す）', () async {
+      final acc = _SpyAccounting(log, 'A');
+      await transport.start(ownerA, persistentReq('aaaa', contentId: 'A'),
+          accounting: acc);
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 2, isPlaying: true, ttsStatus: TtsStatus.playing));
+      final before = transport.activeSnapshot!;
+      log.clear();
+
+      final result = await transport.adoptActivePersistent(
+        target: PersistentTarget.ofRegisteredSessionContentId('A'),
+        newOwner: ownerA,
+        accounting: acc,
+      );
+
+      expect(log, isEmpty, reason: 'flush/onPlaybackStarted/TTSのいずれも起きない');
+      expect(transport.activeOwner, ownerA);
+      expect(result!.owner, before.owner);
+      expect(result.position, before.position);
+      expect(result.epoch, before.epoch);
+      expect(result.isPlaying, before.isPlaying);
+    });
+
+    test('adoption: activeが無ければnull（noActive）で完全no-op', () async {
+      final result = await transport.adoptActivePersistent(
+        target: PersistentTarget.ofRegisteredSessionContentId('A'),
+        newOwner: ownerA,
+        accounting: const NoUsageAccounting(),
+      );
+      expect(result, isNull);
+      expect(log, isEmpty);
+    });
+
+    test('adoption: Transient targetが活性中はnull（型レベルでは無くruntime narrowing）',
+        () async {
+      await transport.start(ownerA, req('transient'),
+          accounting: const NoUsageAccounting());
+      final result = await transport.adoptActivePersistent(
+        target: PersistentTarget.ofRegisteredSessionContentId('A'),
+        newOwner: ownerB,
+        accounting: const NoUsageAccounting(),
+      );
+      expect(result, isNull);
+      expect(transport.activeOwner, ownerA, reason: 'Transientのownerは無変化');
+    });
+
+    test('INV-7: 別contentのtargetに対するadoptionはnull、活性owner/requestは無変化',
+        () async {
+      await transport.start(ownerA, persistentReq('aaaa', contentId: 'A'),
+          accounting: const NoUsageAccounting());
+      final result = await transport.adoptActivePersistent(
+        target: PersistentTarget.ofRegisteredSessionContentId('B'),
+        newOwner: ownerB,
+        accounting: const NoUsageAccounting(),
+      );
+      expect(result, isNull);
+      expect(transport.activeOwner, ownerA);
+      expect((transport.activeRequestForDebug!.target as PersistentTarget)
+          .contentId, 'A');
+    });
+
+    test(
+        'T14 [RT-4]: 1回のadoptionをまたぐusage accounting（position streamは動き続ける）。'
+        'no-await swap windowにより新ownerへ即座に正しく帰属し、合計課金は単一session'
+        '相当（P_final-P_start）になる（INV-12）', () async {
+      final settingsRepo = _FakeSettingsRepository();
+      final counter = CountTtsUsageUseCase(
+        settingsRepo: settingsRepo,
+        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+      );
+      final accounting = PersistentUsageAccounting(counter);
+      final accepted = <OwnedPositionEvent>[];
+      transport.acceptedPositions.listen(accepted.add);
+
+      await transport.start(ownerA, persistentReq('0123456789', contentId: 'A'),
+          accounting: accounting);
+      handlerPosition = 3;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 3, isPlaying: true, ttsStatus: TtsStatus.playing));
+
+      final adopt = transport.adoptActivePersistent(
+        target: PersistentTarget.ofRegisteredSessionContentId('A'),
+        newOwner: ownerB,
+        accounting: accounting,
+      );
+      // owner swap は同期的に起こる（await境界を挟まない、§8.2.6）ため、
+      // ここで発生するpositionは新ownerへ即座に正しく帰属する。
+      expect(transport.activeOwner, ownerB);
+      handlerPosition = 9;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 9, isPlaying: true, ttsStatus: TtsStatus.playing));
+
+      final snapshot = await adopt;
+      expect(snapshot, isNotNull);
+      expect(snapshot!.owner, ownerB);
+      expect(snapshot.hasLiveStatus, isTrue);
+      expect(snapshot.position, 9);
+
+      handlerPosition = 12;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 12, isPlaying: true, ttsStatus: TtsStatus.playing));
+      await transport.stop(ownerB);
+
+      expect(accepted.map((e) => '${e.owner}:${e.charPosition}'),
+          ['np:A:3', 'np:B:9', 'np:B:12']);
+      expect(await settingsRepo.get(SettingKeys.ttsUsedChars), '12',
+          reason: 'P_final(12) - P_start(0)。二重計上も欠落も無い');
+    });
+
+    test(
+        'T15b [NR-1][RT-4]: reopenによる新sessionへの再adoption（non-quiescent）。'
+        'flushは1回だけ、restartも1回だけ、TTSは無変化、旧ownerの遅延teardownは'
+        'ignoredStaleOwnerになる', () async {
+      final settingsRepo = _FakeSettingsRepository();
+      final counter = CountTtsUsageUseCase(
+        settingsRepo: settingsRepo,
+        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+      );
+      final accounting = PersistentUsageAccounting(counter);
+
+      await transport.start(ownerA, persistentReq('aaaaaaaaaa', contentId: 'A'),
+          accounting: accounting);
+      handlerPosition = 4;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 4, isPlaying: true, ttsStatus: TtsStatus.playing));
+      final speakCountBefore = tts.speakCount;
+
+      final adopt = transport.adoptActivePersistent(
+        target: PersistentTarget.ofRegisteredSessionContentId('A'),
+        newOwner: ownerB,
+        accounting: accounting,
+      );
+      handlerPosition = 7;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 7, isPlaying: true, ttsStatus: TtsStatus.playing));
+      await adopt;
+
+      expect(transport.activeOwner, ownerB);
+      expect(tts.speakCount, speakCountBefore, reason: 'adoptionはspeak()を呼ばない');
+      expect(tts.stopCount, 0, reason: 'adoptionはstop()も呼ばない');
+
+      handlerPosition = 10;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 10, isPlaying: true, ttsStatus: TtsStatus.playing));
+      await transport.stop(ownerB);
+
+      expect(await settingsRepo.get(SettingKeys.ttsUsedChars), '10');
+
+      // 旧sessionの遅延teardownは、既にownerが進んでいるためno-op。
+      final stale = await transport.forceStopForTeardown(
+        expectedOwner: ownerA,
+        reason: TeardownReason.routeRemoval,
+        notificationDisposition: NotificationDisposition.handoff,
+      );
+      expect(stale.application, TeardownApplication.ignoredStaleOwner);
+    });
+
+    test(
+        'T15c [NR-1][RT-4]: 3段のreopen chain（np:B -> np:C -> np:D）。'
+        '各hopでflush/restartは1回ずつ、累計課金は単一session相当', () async {
+      final settingsRepo = _FakeSettingsRepository();
+      final counter = CountTtsUsageUseCase(
+        settingsRepo: settingsRepo,
+        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+      );
+      final accounting = PersistentUsageAccounting(counter);
+
+      await transport.start(ownerA, persistentReq('chain', contentId: 'A'),
+          accounting: accounting);
+      handlerPosition = 2;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 2, isPlaying: true, ttsStatus: TtsStatus.playing));
+
+      Future<ActivePlaybackSnapshot?> hop(PlaybackOwnerKey newOwner) =>
+          transport.adoptActivePersistent(
+            target: PersistentTarget.ofRegisteredSessionContentId('A'),
+            newOwner: newOwner,
+            accounting: accounting,
+          );
+
+      final hopToB = hop(ownerB);
+      handlerPosition = 5;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 5, isPlaying: true, ttsStatus: TtsStatus.playing));
+      expect((await hopToB)!.owner, ownerB);
+
+      final hopToC = hop(ownerC);
+      handlerPosition = 8;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 8, isPlaying: true, ttsStatus: TtsStatus.playing));
+      expect((await hopToC)!.owner, ownerC);
+
+      final hopToD = hop(ownerD);
+      handlerPosition = 11;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 11, isPlaying: true, ttsStatus: TtsStatus.playing));
+      expect((await hopToD)!.owner, ownerD);
+
+      expect(transport.activeOwner, ownerD);
+      await transport.stop(ownerD);
+
+      expect(await settingsRepo.get(SettingKeys.ttsUsedChars), '11',
+          reason: 'P_final(11) - P_start(0)。chain全体で単一session相当');
+      expect(tts.stopCount, 1,
+          reason: 'TTS stopはchainの最後のstop()だけ（adoptionは1回もstopを呼ばない）');
+    });
+
+    test(
+        'T17 [RT-3]: 前sessionのlive-state(isPlaying=true)は新sessionへ継承されない'
+        '（INV-16）', () async {
+      final acc1 = _SpyAccounting(log, '1');
+      await transport.start(ownerA, req('S1'), accounting: acc1);
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 5, isPlaying: true, ttsStatus: TtsStatus.playing));
+      expect(transport.activeSnapshot!.hasLiveStatus, isTrue);
+      expect(transport.activeSnapshot!.isPlaying, isTrue);
+      final epochAfterS1 = transport.activeSnapshot!.epoch;
+
+      await transport.forceStopForTeardown(
+        expectedOwner: ownerA,
+        reason: TeardownReason.terminalClose,
+        notificationDisposition: NotificationDisposition.clearIfNoLiveOwner,
+      );
+      expect(transport.activeSnapshot, isNull);
+
+      final acc2 = _SpyAccounting(log, '2');
+      await transport.start(ownerB, req('S2'), accounting: acc2);
+      // 意図的にposition eventをまだ発生させない: 受理済みeventが無い。
+      final snap2 = transport.activeSnapshot!;
+      expect(snap2.hasLiveStatus, isFalse,
+          reason: 'session1のisPlaying:trueを継承しない');
+      expect(snap2.isPlaying, isFalse);
+      expect(snap2.ttsStatus, TtsStatus.stopped);
+      expect(snap2.epoch, greaterThan(epochAfterS1),
+          reason: '_sessionEpochがsession境界で進んでいる');
+    });
+
+    test(
+        'T18 [RT-4]: 旧ownerのflush書込みが遅延している間にhandoffが完了し、'
+        'handoff後のpositionも新ownerへ正しく計上される（二重計上も欠落も無い）',
+        () async {
+      final settingsRepo = _DelayableSettingsRepository();
+      final counter = CountTtsUsageUseCase(
+        settingsRepo: settingsRepo,
+        checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
+      );
+      final accounting = PersistentUsageAccounting(counter);
+
+      await transport.start(ownerA, persistentReq('T18', contentId: 'A'),
+          accounting: accounting);
+      handlerPosition = 3;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 3, isPlaying: true, ttsStatus: TtsStatus.playing));
+
+      final gate = Completer<void>();
+      settingsRepo.holdNextSet = gate;
+
+      final adopt = transport.adoptActivePersistent(
+        target: PersistentTarget.ofRegisteredSessionContentId('A'),
+        newOwner: ownerB,
+        accounting: accounting,
+      );
+      // owner swapはflushの永続化書込み完了を待たない（no-await swap window）。
+      expect(transport.activeOwner, ownerB);
+
+      handlerPosition = 9;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 9, isPlaying: true, ttsStatus: TtsStatus.playing));
+
+      gate.complete();
+      final snapshot = await adopt;
+      expect(snapshot!.owner, ownerB);
+
+      handlerPosition = 12;
+      positions.add(const TtsPlaybackPosition(
+          charPosition: 12, isPlaying: true, ttsStatus: TtsStatus.playing));
+      await transport.stop(ownerB);
+
+      expect(await settingsRepo.get(SettingKeys.ttsUsedChars), '12',
+          reason: 'P_final(12) - P_start(0)。遅延書込みがあっても二重計上・欠落は無い');
+    });
+  });
 }
 
 class _FakeTts implements TtsService {
@@ -379,6 +731,7 @@ class _FakeTts implements TtsService {
   bool failSpeak = false;
   bool failStop = false;
   int stopCount = 0;
+  int speakCount = 0;
   void Function()? onSpeak;
 
   @override
@@ -390,6 +743,7 @@ class _FakeTts implements TtsService {
     double volume = 1.0,
     String? voiceId,
   }) async {
+    speakCount++;
     onSpeak?.call();
     if (failSpeak) throw StateError('speak failed');
     log.add('tts:speak:$text');
@@ -453,4 +807,51 @@ class _SpyAccounting implements PlaybackUsageAccounting {
 
   @override
   void onPlaybackAborted(PlaybackOwnerKey owner) => aborted.add(owner);
+}
+
+/// T14/T15b/T15c 用。実際の [CountTtsUsageUseCase] を app-shared 1 instance と
+/// して両ownerに渡し、adoption 前後の合計課金が単一session相当になることを
+/// 実際の文字数算術で検証する（INV-12）。
+class _FakeSettingsRepository implements SettingsRepository {
+  final Map<String, String> _store = {};
+
+  @override
+  Future<String?> get(String key) async => _store[key];
+
+  @override
+  Future<void> set(String key, String value) async {
+    _store[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async => _store.remove(key);
+
+  @override
+  Future<Map<String, String>> getAll() async => Map.of(_store);
+}
+
+/// T18 用。次の `set()` 呼び出しだけを、[holdNextSet] が complete するまで
+/// 保留する（永続化書込みが handoff より遅延するケースを再現する）。
+class _DelayableSettingsRepository implements SettingsRepository {
+  final Map<String, String> _store = {};
+  Completer<void>? holdNextSet;
+
+  @override
+  Future<String?> get(String key) async => _store[key];
+
+  @override
+  Future<void> set(String key, String value) async {
+    final hold = holdNextSet;
+    if (hold != null) {
+      holdNextSet = null;
+      await hold.future;
+    }
+    _store[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async => _store.remove(key);
+
+  @override
+  Future<Map<String, String>> getAll() async => Map.of(_store);
 }

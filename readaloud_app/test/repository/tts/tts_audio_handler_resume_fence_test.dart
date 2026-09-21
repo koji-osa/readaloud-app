@@ -110,7 +110,12 @@ void main() {
 
       expect(spoken, isEmpty);
       expect(handler.playbackState.value.controls, isEmpty);
-      expect(handler.mediaItem.value, isNull);
+      // NOTE (Playback Session Lifecycle Hardening A2 / INV-14): この
+      // assertionはDart側のBehaviorSubject値を見ており、実際の platform
+      // message 境界を見ていない — DA-1をshipさせた同じfalse-greenの形。
+      // A2でmediaItem.add(null)を削除したため、Dart側の値はもう変化しない
+      // （意図的。null replacementはINV-14に違反する）。platform-boundary側の
+      // 等価な検証はT1（tts_audio_handler_platform_boundary_test.dart）が行う。
     });
 
     test(
@@ -170,7 +175,6 @@ void main() {
     await handler.play(); // interruption end(pause) 相当
 
     expect(spoken, isEmpty, reason: 'retire済みtextは復活しない（INV-T7 / AC-17）');
-    expect(handler.mediaItem.value, isNull);
     expect(handler.playbackState.value.playing, isFalse);
     expect(
         handler.playbackState.value.processingState, AudioProcessingState.idle);

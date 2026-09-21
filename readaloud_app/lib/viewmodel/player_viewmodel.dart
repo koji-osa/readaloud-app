@@ -8,7 +8,6 @@ import '../repository/playback_repository.dart';
 import '../repository/bookmark_repository.dart';
 import '../repository/settings_repository.dart';
 import '../model/setting.dart';
-import '../model/tts_playback_position.dart';
 import '../repository/tts/tts_service.dart';
 import '../usecase/playback/save_playback_state_usecase.dart';
 import '../usecase/playback/set_ab_repeat_usecase.dart';
@@ -94,11 +93,9 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   final SaveContentUseCase _saveContent; // REQ-034
   // ignore: unused_field
   final CheckTtsLimitUseCase _checkTtsLimit;
-  // TtsAudioHandler（具象クラス）ではなく position stream / 現在位置取得関数を
-  // 直接受け取る。QuickListenViewModel の positionStream / getCurrentPosition
-  // 注入と同じ方式にすることで、audio_service の重量な具象クラスをテストで
-  // fakeする必要が無くなる（テスト容易性）。
-  final Stream<dynamic> _positionStream;
+  // FIX-026等の位置取得（保存操作向け）専用。ライブ更新パイプラインでは
+  // 使わない（Detailed Design v1.2 FINAL §8.4.2: これは「位置の読み取り」で
+  // あり、ライブpipelineではない — 変更不要）。
   final int Function() _getCurrentPosition;
   final PlaybackRepository _playbackRepo;
   final SettingsRepository _settingsRepo;
@@ -109,19 +106,17 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
   /// import しない（層分離・テスト容易性のため注入で受け取る）。
   final bool Function(String sessionId) _isEffectCurrent;
 
-  StreamSubscription<dynamic>? _playbackStateSubscription;
-  bool _hasReceivedPosition = false;
+  /// Normal Player の唯一の live-position pipeline（Detailed Design v1.2
+  /// FINAL §8.4.1, RT-7 / INV-18）。attach中のsessionへ`setContent`ごとに
+  /// 無条件で（adoptionの成否に関わらず）張り直す。D15受理判定はTransport側
+  /// （gate.liveUpdatesの供給源＝acceptedPositions）が唯一の権威であり、
+  /// VM側に重複したgateは存在しない。
+  StreamSubscription<PersistentLiveUpdate>? _liveSubscription;
 
   /// ② VM↔session の現在の紐付け（mutable）。origin-bound な判定の代用には
-  /// しない。ambient write（position stream）と attach 整合性の二次検査にのみ
+  /// しない。ambient write（live update）と attach 整合性の二次検査にのみ
   /// 使う（D1/D9）。
   String? _attachedSessionId;
-
-  // v0.4.1 D15 position-stream gating: このsessionの再生開始
-  // （isPlaying:true）を確認するまでは、customStateの再送/stale値を
-  // UI stateへ反映しない（Quick Listenの既存実証済みパターンと同型）。
-  bool _hasCalledPlayForCurrentSession = false;
-  bool _acceptPositionUpdates = false;
 
   PlayerViewModel({
     required NormalPlayerPlaybackGate playbackGate,
@@ -133,7 +128,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     required UpdateContentUseCase updateContent,
     required SaveContentUseCase saveContent, // REQ-034
     required CheckTtsLimitUseCase checkTtsLimit,
-    required Stream<dynamic> positionStream,
     required int Function() getCurrentPosition,
     required PlaybackRepository playbackRepo,
     required SettingsRepository settingsRepo,
@@ -147,14 +141,11 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         _updateContent = updateContent,
         _saveContent = saveContent, // REQ-034
         _checkTtsLimit = checkTtsLimit,
-        _positionStream = positionStream,
         _getCurrentPosition = getCurrentPosition,
         _playbackRepo = playbackRepo,
         _settingsRepo = settingsRepo,
         _bookmarkRepo = bookmarkRepo,
-        super(PlayerState()) {
-    _listenToStreams();
-  }
+        super(PlayerState());
 
   /// 唯一の state 書込み口。disposed / superseded / re-owned のいずれでも
   /// 例外を出さず false を返して縮退する（NRR-13）。origin に既定値は無い。
@@ -194,53 +185,30 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
     }));
   }
 
-  void _listenToStreams() {
-    _playbackStateSubscription = _positionStream.listen((data) {
-      if (data is! TtsPlaybackPosition) return;
-      final isFirstEvent = !_hasReceivedPosition;
-      _hasReceivedPosition = true;
-
-      // v0.4.1 D15: このsession自身の再生開始（isPlaying:true）を確認する
-      // までは適用しない。A→Bのhandoff直後にAのstale positionが届いても
-      // Bのstate/usageを汚染しない。
-      if (!_acceptPositionUpdates &&
-          _hasCalledPlayForCurrentSession &&
-          data.isPlaying) {
-        _acceptPositionUpdates = true;
-      }
-      final attachedSessionId = _attachedSessionId;
-      final appliedToState = _acceptPositionUpdates &&
-          attachedSessionId != null &&
-          _isEffectCurrent(attachedSessionId);
-
-      unawaited(DebugLogger.instance.logEvent('tts_position_received', {
-        'origin': 'player',
-        'sessionId': attachedSessionId,
-        'charPosition': data.charPosition,
-        'isPlaying': data.isPlaying,
-        'ttsStatus': data.ttsStatus.name,
-        'isFirstEvent': isFirstEvent,
-        'appliedToState': appliedToState,
-      }));
-
-      if (!appliedToState || !mounted) return;
-      final content = state.content;
-      if (content == null || content.body.isEmpty) return;
-
-      final position = data.charPosition;
-      final progressPct =
-          (position / content.body.length * 100).clamp(0.0, 100.0);
-
-      state = state.copyWith(
-        highlightPosition: position,
-        isPlaying: data.isPlaying,
-        ttsStatus: data.ttsStatus,
-        playbackState: state.playbackState?.copyWith(
-          position: position,
+  /// Normal Player の唯一の live-position pipeline上のevent handler
+  /// （Detailed Design v1.2 FINAL §8.4.3）。`_accepted`はsync:trueな
+  /// broadcast controllerのため、このhandlerは`_onPosition`の内部から
+  /// 同期的に呼ばれうる — Transportへ同期的にcall backしてはならない
+  /// （§8.2.6 (2)）。ここではVM stateの書込みだけを行うため安全である。
+  void _onLiveUpdate(PlayerOriginToken origin, PersistentLiveUpdate u) {
+    if (!mounted || !_isEffectCurrent(origin.sessionId)) return;
+    final content = state.content;
+    final progressPct = (content != null && content.body.isNotEmpty)
+        ? (u.position / content.body.length * 100).clamp(0.0, 100.0)
+        : state.playbackState?.progressPct ?? 0.0;
+    _write(
+      origin,
+      (s) => s.copyWith(
+        highlightPosition: u.position,
+        isPlaying: u.isPlaying,
+        ttsStatus: u.ttsStatus,
+        playbackState: s.playbackState?.copyWith(
+          position: u.position,
           progressPct: progressPct,
         ),
-      );
-    });
+      ),
+      stage: 'live_update',
+    );
   }
 
   /// session attach 操作（D1/D10）。`copyWith` ではなく新規 [PlayerState] を
@@ -257,12 +225,23 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       return;
     }
     _attachedSessionId = origin.sessionId;
-    _hasReceivedPosition = false;
-    _hasCalledPlayForCurrentSession = false;
-    _acceptPositionUpdates = false;
     state = PlayerState(content: content, isLoading: true); // fresh構築（D10）
 
+    // Detailed Design v1.2 FINAL §8.4.1 [RT-7] / INV-18: adoptionの成否に
+    // 関わらず無条件でliveUpdatesへ購読する。D15受理はTransport（gateの
+    // 供給源＝acceptedPositions）が唯一の権威であり、VM側に重複したgateは
+    // 置かない。通常の新規Playとadoptされたrebindは同じpipelineを使う。
+    unawaited(_liveSubscription?.cancel());
+    _liveSubscription = _playbackGate
+        .liveUpdates(sessionId: origin.sessionId)
+        .listen((u) => _onLiveUpdate(origin, u));
+
     try {
+      final live = await _playbackGate.adoptLiveSession(
+        sessionId: origin.sessionId,
+        contentId: content.id,
+      );
+
       final existingState = await _playbackRepo.getByContentId(content.id);
       final PlaybackState playbackState;
       if (existingState != null) {
@@ -281,12 +260,26 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       }
       // DBからブックマークを読み込む（FIX-025）
       final bookmarks = await _bookmarkRepo.getByContentId(content.id);
+
+      // Race A: DB read後・書込み直前にもう一度読み直す。live overlayは
+      // 必ずDB値の後に適用する（§8.4.3 step 5-6）。
+      final latest = live == null
+          ? null
+          : _playbackGate.liveSnapshotFor(sessionId: origin.sessionId);
+
       _write(
         origin,
         (s) => s.copyWith(
           content: content,
-          playbackState: playbackState,
-          highlightPosition: playbackState.position,
+          playbackState: latest == null
+              ? playbackState
+              : playbackState.copyWith(
+                  position: latest.position,
+                  speed: latest.voice.speed, // [RT-6]: latest.speedではない
+                ),
+          highlightPosition: latest?.position ?? playbackState.position,
+          isPlaying: latest?.isPlaying ?? false,
+          ttsStatus: latest?.ttsStatus ?? TtsStatus.stopped,
           bookmarks: bookmarks,
           isLoading: false,
         ),
@@ -310,7 +303,6 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
       return;
     }
     if (state.content == null || state.content!.id != origin.contentId) return;
-    _hasCalledPlayForCurrentSession = true; // gate.start()より前（QLと同じタイミング）
     try {
       await _playbackGate.start(
           sessionId: origin.sessionId, contentId: origin.contentId);
@@ -917,7 +909,7 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
 
   @override
   void dispose() {
-    _playbackStateSubscription?.cancel();
+    _liveSubscription?.cancel();
     // R-7: 共有 playback gate（および共有 position 購読）は app-shared provider
     // の所有物。autoDispose される VM からは破棄しない（破棄は
     // normalPlayerPlaybackGateProvider の ref.onDispose のみ）。

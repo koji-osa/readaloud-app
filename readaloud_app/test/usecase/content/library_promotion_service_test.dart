@@ -276,7 +276,6 @@ PlayerViewModel _playerViewModel(
     updateContent: UpdateContentUseCase(contentRepo),
     saveContent: SaveContentUseCase(contentRepo),
     checkTtsLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
-    positionStream: const Stream.empty(),
     getCurrentPosition: () => 0,
     playbackRepo: playbackRepo,
     settingsRepo: settingsRepo,

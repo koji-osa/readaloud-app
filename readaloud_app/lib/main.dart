@@ -29,18 +29,22 @@ const String kAppVersion = '1.2.23+44';
 const String kBuildCommit =
     String.fromEnvironment('BUILD_COMMIT', defaultValue: 'unknown');
 
+/// production の audio_service 設定。T1b / platform-boundary test が
+/// literal を複製して「自分自身を検証する」のを防ぐため、唯一の定義点とする。
+const AudioServiceConfig kAudioServiceConfig = AudioServiceConfig(
+  androidNotificationChannelId: 'com.example.readaloud_app.audio',
+  androidNotificationChannelName: 'ReadAloud',
+  androidNotificationOngoing: false,
+  androidStopForegroundOnPause: true,
+);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // audio_service初期化（TtsAudioHandlerのシングルトンを生成）
   final audioHandler = await AudioService.init(
     builder: () => TtsAudioHandler(),
-    config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.example.readaloud_app.audio',
-      androidNotificationChannelName: 'ReadAloud',
-      androidNotificationOngoing: false,
-      androidStopForegroundOnPause: false,
-    ),
+    config: kAudioServiceConfig,
   );
 
   await AudioService.androidForceEnableMediaButtons();

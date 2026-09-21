@@ -66,7 +66,6 @@ final playerViewModelProvider =
     saveContent: SaveContentUseCase(contentRepo), // REQ-034
     bookmarkRepo: bookmarkRepo,
     checkTtsLimit: checkTtsLimit,
-    positionStream: audioHandler.customState,
     getCurrentPosition: () => audioHandler.currentPosition,
     playbackRepo: playbackRepo,
   );
