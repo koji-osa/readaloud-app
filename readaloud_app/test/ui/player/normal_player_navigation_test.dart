@@ -22,10 +22,11 @@ import 'package:readaloud_app/usecase/bookmark/add_bookmark_usecase.dart';
 import 'package:readaloud_app/usecase/bookmark/delete_bookmark_usecase.dart';
 import 'package:readaloud_app/usecase/content/save_content_usecase.dart';
 import 'package:readaloud_app/usecase/content/update_content_usecase.dart';
+import 'package:readaloud_app/usecase/playback/persistent_playback_resolver.dart';
+import 'package:readaloud_app/usecase/playback/playback_usage_accounting.dart';
 import 'package:readaloud_app/usecase/playback/save_playback_state_usecase.dart';
 import 'package:readaloud_app/usecase/playback/set_ab_repeat_usecase.dart';
-import 'package:readaloud_app/usecase/playback/start_playback_usecase.dart';
-import 'package:readaloud_app/usecase/playback/stop_playback_usecase.dart';
+import 'package:readaloud_app/usecase/playback/shared_playback_transport.dart';
 import 'package:readaloud_app/usecase/tts/check_tts_limit_usecase.dart';
 import 'package:readaloud_app/usecase/tts/count_tts_usage_usecase.dart';
 import 'package:readaloud_app/util/debug_logger.dart';
@@ -73,6 +74,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(PlayerScreen), findsOneWidget);
 
+    // SharedPlaybackTransportのowner guard（INV-3）はactive ownerが無ければ
+    // retireActiveForExternalEntryをTTSへ触れないno-opにするため、実際に
+    // 再生中のsessionを retire する経路を検証するにはplay()が必要。
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pump();
+
     await env.harnessState.share('flow-1');
     await tester.pumpAndSettle();
 
@@ -118,6 +125,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(PlayerScreen), findsOneWidget);
 
+    // owner guard（INV-3）はactive ownerが無ければTTSへ触れないno-opに
+    // するため、stop失敗を実際に経路上で発生させるにはplay()が必要。
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pump();
+
     await env.harnessState.share('flow-1');
     await tester.pumpAndSettle();
 
@@ -158,42 +170,45 @@ void main() {
   });
 
   testWidgets(
-      'D15: Bがattach/start境界を越えたが自身の再生をまだ受理していない間に、'
+      'D15/INV-16 (Playback Session Lifecycle Hardening Slice 3/4): '
+      'Bがattach/start境界を越えたが自身の再生をまだ受理していない間に、'
       'A由来のstale positionが届いても、UI state（highlightPosition）にも'
       'usage counterのflushにも混入しない（I-02是正）', (tester) async {
     final env = await _pumpHarness(tester);
 
     // 1) Session A: 実際にplay()し、isPlaying:trueイベントを一度受理させる。
-    //    これによりStartPlaybackUseCase側の共有subscriptionが
-    //    「acceptしている状態」に入る（=Aが実際に再生position contextを
-    //    持つ状態。単にsessionを作っただけではsubscriptionが一度も
-    //    accept状態にならず、後段のstale注入が何にも当たらない空振り
-    //    テストになってしまうため、これを避ける）。
+    //    これによりSharedPlaybackTransportのownerがnp:Aに設定され、D15
+    //    accept gate（_hasCalledSpeak/_accept）が開く。単にsessionを作った
+    //    だけではacceptしないため、後段のstale注入が何にも当たらない
+    //    空振りテストになってしまうため、これを避ける。
     unawaited(env.harnessState.openFromHome(_content('c1')));
     await tester.pumpAndSettle();
     final sessionA = env.tracker.currentSession!;
 
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pump();
-    env.positionController.add(const TtsPlaybackPosition(
+    env.emitPosition(const TtsPlaybackPosition(
       charPosition: 30,
       isPlaying: true,
       ttsStatus: TtsStatus.playing,
     ));
     await tester.pump();
 
-    // AをAppBar Backで離脱させる。vm.stop()経由でAの使用量(30)は正しく
-    // flushされるが、StartPlaybackUseCase._positionSubscriptionはexecute()
-    // 呼び出し時にしか再購読されないため、この時点ではまだAのsubscriptionが
-    // acceptしたままdangling状態で残る（次にNormal Playerがplay()するまで）。
+    // AをAppBar Backで離脱させる。vm.stop()（owned stop）経由でAの使用量(30)
+    // は正しくflushされるが、stop()はTransportのactiveOwner/acceptを恒久
+    // retireしない（teardownのみがclearする — shared_playback_transport.dart
+    // 「通常stopはownerを恒久retireしない」）。したがってこの時点でも
+    // Transportのactive ownerはnp:Aのまま、D15 acceptも開いたまま
+    // dangling状態で残る。
     await tester.tap(find.byIcon(Icons.arrow_back));
     await tester.pumpAndSettle();
     expect(env.tracker.currentSession, isNull);
     expect(await env.settingsRepo.get(SettingKeys.ttsUsedChars), '30',
         reason: 'Aの正当なflushが先に行われていることの前提確認');
 
-    // 2) Session B: 新しいNormal Player sessionとしてattachするが、
-    //    まだplay()を呼んでいない（=受理前）。
+    // 2) Session B: 新しいNormal Player sessionとしてattachする。targetが
+    //    A(c1)と異なるため、adoptActivePersistentはtargetMismatchでnullを
+    //    返し、Bはownerを引き継がない（INV-7）。
     unawaited(env.harnessState.openFromHome(_content('c2')));
     await tester.pumpAndSettle();
     final sessionB = env.tracker.currentSession!;
@@ -202,22 +217,24 @@ void main() {
         reason: 'B-initialのhighlightPositionは0');
 
     // 3) B受理前に、A由来のstale position（charPosition=601,
-    //    isPlaying:true）をpositionControllerへ注入する。Aのdangling
-    //    subscriptionはacceptしたままなので、production内部では
-    //    CountTtsUsageUseCase._currentPositionが一時的に601へ書き換わり
-    //    うる状態である。
-    env.positionController.add(const TtsPlaybackPosition(
+    //    isPlaying:true）をpositionControllerへ注入する。TransportのactiveOwner
+    //    はまだnp:Aのdangling状態なので、production内部ではこのeventはnp:Aで
+    //    刻印され、CountTtsUsageUseCase._currentPositionが一時的に601へ
+    //    書き換わりうる状態である。
+    env.emitPosition(const TtsPlaybackPosition(
       charPosition: 601,
       isPlaying: true,
       ttsStatus: TtsStatus.playing,
     ));
     await tester.pump();
 
-    // (a) UI destination: Bの新しいVMインスタンス自身のgateは
-    //     まだ開いていない（B自身のplay()を一度も呼んでいない）ため、
-    //     staleイベントはstateへ反映されない。
+    // (a) UI destination: gate.liveUpdates(sessionId: B)はowner==np:Bで
+    //     filterするため、np:A刻印のstale eventはBのVMへ一切届かない
+    //     （RT-2/RT-7、gateの供給源はacceptedPositionsでありowner非該当は
+    //     構造的に素通りしない）。
     expect(env.harnessState.currentPlayerState().highlightPosition, 0,
-        reason: 'D15: B受理前のstale positionはUI stateへ反映されない');
+        reason: 'D15/RT-7: B受理前のstale positionはUI stateへ反映されない'
+            '（owner-stamped pipelineによりnp:A刻印のeventはフィルタされる）');
 
     // (b) Usage destination: Bが実際に自分のplay()を呼び、自分自身の
     //     正当なposition(12)を1件受理した後にflushしても、直前に注入した
@@ -226,7 +243,7 @@ void main() {
     //     決定論的な観測点=永続化されたttsUsedCharsを使う）。
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pump();
-    env.positionController.add(const TtsPlaybackPosition(
+    env.emitPosition(const TtsPlaybackPosition(
       charPosition: 12,
       isPlaying: true,
       ttsStatus: TtsStatus.playing,
@@ -256,6 +273,7 @@ class _TestEnv {
     required this.ttsService,
     required this.positionController,
     required this.settingsRepo,
+    required this.handlerPosition,
   });
 
   final _NormalPlayerNavHarnessState harnessState;
@@ -264,6 +282,21 @@ class _TestEnv {
   final _FakeTtsService ttsService;
   final StreamController<dynamic> positionController;
   final _FakeSettingsRepository settingsRepo;
+
+  /// SharedPlaybackTransportへ注入する現在位置（handlerの`currentPosition`
+  /// 相当）。テスト本体は`positionController.add(...)`と合わせてこの値も
+  /// 更新する。
+  final _PositionBox handlerPosition;
+
+  /// [positionController]へのイベント追加と[handlerPosition]の更新を一度に行う。
+  void emitPosition(TtsPlaybackPosition position) {
+    handlerPosition.value = position.charPosition;
+    positionController.add(position);
+  }
+}
+
+class _PositionBox {
+  int value = 0;
 }
 
 Future<_TestEnv> _pumpHarness(WidgetTester tester) async {
@@ -283,29 +316,27 @@ Future<_TestEnv> _pumpHarness(WidgetTester tester) async {
   final positionController = StreamController<dynamic>.broadcast();
   addTearDown(positionController.close);
 
+  final handlerPosition = _PositionBox();
   final countUsage = CountTtsUsageUseCase(
     settingsRepo: settingsRepo,
     checkLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
   );
-  final startPlayback = StartPlaybackUseCase(
-    contentRepo: contentRepo,
-    playbackRepo: playbackRepo,
-    positionStream: positionController.stream,
-    ttsService: ttsService,
-    countUsage: countUsage,
-  );
   final savePlaybackState = SavePlaybackStateUseCase(
       playbackRepo: playbackRepo, contentRepo: contentRepo);
-  final stopPlayback = StopPlaybackUseCase(
-    playbackRepo: playbackRepo,
-    ttsService: ttsService,
-    countUsage: countUsage,
-    saveState: savePlaybackState,
+  final transport = SharedPlaybackTransport(
+    tts: ttsService,
+    positionStream: positionController.stream,
+    currentPosition: () => handlerPosition.value,
+    resumeFence: _NoopFence(),
   );
-  final gate = NormalPlayerPlaybackGate(
-    startPlayback: startPlayback,
-    stopPlayback: stopPlayback,
-    getCurrentPosition: () => 0,
+  addTearDown(transport.dispose);
+  final gate = NormalPlayerPlaybackGate.shared(
+    transport: transport,
+    resolver: PersistentPlaybackResolver(
+        contentRepo: contentRepo, playbackRepo: playbackRepo),
+    playbackRepo: playbackRepo,
+    savePlaybackState: savePlaybackState,
+    accounting: PersistentUsageAccounting(countUsage),
   );
   final tracker = NormalPlayerSessionTracker(playbackGate: gate);
 
@@ -331,8 +362,7 @@ Future<_TestEnv> _pumpHarness(WidgetTester tester) async {
               updateContent: UpdateContentUseCase(contentRepo),
               saveContent: SaveContentUseCase(contentRepo),
               checkTtsLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
-              positionStream: positionController.stream,
-              getCurrentPosition: () => 0,
+              getCurrentPosition: () => handlerPosition.value,
               playbackRepo: playbackRepo,
               settingsRepo: settingsRepo,
               bookmarkRepo: bookmarkRepo,
@@ -350,6 +380,7 @@ Future<_TestEnv> _pumpHarness(WidgetTester tester) async {
     ttsService: ttsService,
     positionController: positionController,
     settingsRepo: settingsRepo,
+    handlerPosition: handlerPosition,
   );
 }
 
@@ -451,6 +482,13 @@ class _CoveringScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+class _NoopFence implements PlaybackResumeFence {
+  @override
+  Future<void> discardResumeState({
+    required NotificationDisposition notificationDisposition,
+  }) async {}
 }
 
 class _FakeTtsService implements TtsService {

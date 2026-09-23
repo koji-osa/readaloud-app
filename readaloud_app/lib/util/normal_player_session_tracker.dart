@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../model/normal_player_session.dart';
 import '../model/playback_request.dart';
 import '../repository/playback_repository.dart';
+import '../repository/tts/tts_service.dart' show TtsStatus;
 import '../usecase/playback/persistent_playback_resolver.dart';
 import '../usecase/playback/playback_persistence_policy.dart';
 import '../usecase/playback/playback_usage_accounting.dart';
@@ -28,6 +29,51 @@ class PlayerRegistrationToken {
   final NormalPlayerSession session;
   final Route<dynamic> route;
   final _Registration? _previous;
+}
+
+/// adoption 成功時に VM が受け取る live session の記述（read-only）。
+/// [ActivePlaybackSnapshot] の VM 層 projection。owner key は公開しない
+/// （Detailed Design v1.2 FINAL §8.3.1）。
+final class PersistentLiveSession {
+  const PersistentLiveSession({
+    required this.contentId,
+    required this.hasLiveStatus,
+    required this.isPlaying,
+    required this.position,
+    required this.ttsStatus,
+    required this.voice,
+    required this.epoch,
+  });
+
+  final String contentId;
+
+  /// [RT-3]。この playback session で受理済み event を1件以上観測済みか。
+  final bool hasLiveStatus;
+
+  /// hasLiveStatus == false のとき必ず false。
+  final bool isPlaying;
+  final int position;
+
+  /// hasLiveStatus == false のとき必ず TtsStatus.stopped。
+  final TtsStatus ttsStatus;
+  final PlaybackVoiceParams voice;
+  final int epoch;
+}
+
+/// owner 刻印済み・D15 受理済みの live update（VM 層 projection）。
+/// [OwnedPositionEvent] から owner を落としたもの（gate が既に filter 済み）。
+/// 1件でも届いた時点で、その session の live status は「観測済み」である
+/// （Detailed Design v1.2 FINAL §8.3.2）。
+final class PersistentLiveUpdate {
+  const PersistentLiveUpdate({
+    required this.position,
+    required this.isPlaying,
+    required this.ttsStatus,
+  });
+
+  final int position;
+  final bool isPlaying;
+  final TtsStatus ttsStatus;
 }
 
 /// tracker が保持する現在の registration。
@@ -147,6 +193,29 @@ class NormalPlayerPlaybackGate {
   }) =>
       _backend.retireActiveForExternalEntry(reason: reason);
 
+  /// 登録済み [sessionId] のために、[contentId] と一致する live Persistent
+  /// playback を再所有する。一致する live playback が無ければ null（既存 DB
+  /// 経路へ fall through）。例外を投げない（gate の既存 never-throw 契約、
+  /// Detailed Design v1.2 FINAL §8.3.3）。
+  Future<PersistentLiveSession?> adoptLiveSession({
+    required String sessionId,
+    required String contentId,
+  }) =>
+      _backend.adoptLiveSession(sessionId: sessionId, contentId: contentId);
+
+  /// 現在の live playback の最新 snapshot を、[sessionId] が現在の owner
+  /// である場合にだけ返す。そうでなければ null。同期。adoption 直後の
+  /// 「DB read を跨いだ再読み取り」に使う（§8.4 step 5 / Race A）。
+  PersistentLiveSession? liveSnapshotFor({required String sessionId}) =>
+      _backend.liveSnapshotFor(sessionId: sessionId);
+
+  /// [sessionId] が owner として刻印された accepted position event のみを
+  /// 流す。供給源は `SharedPlaybackTransport.acceptedPositions` —
+  /// owner 刻印済み・D15 受理済みの stream。`positionObservations` は
+  /// 使わない（[RT-2]）。
+  Stream<PersistentLiveUpdate> liveUpdates({required String sessionId}) =>
+      _backend.liveUpdates(sessionId: sessionId);
+
   /// provider の ref.onDispose からのみ呼ぶ（R-7）。
   void dispose() => _backend.dispose();
 }
@@ -171,6 +240,12 @@ abstract interface class _NormalPlayerPlaybackBackend {
   Future<PlaybackStopOutcome> retireActiveForExternalEntry({
     required TeardownReason reason,
   });
+  Future<PersistentLiveSession?> adoptLiveSession({
+    required String sessionId,
+    required String contentId,
+  });
+  PersistentLiveSession? liveSnapshotFor({required String sessionId});
+  Stream<PersistentLiveUpdate> liveUpdates({required String sessionId});
   void dispose();
 }
 
@@ -249,6 +324,23 @@ class _UseCasePlaybackBackend implements _NormalPlayerPlaybackBackend {
   }) =>
       throw UnsupportedError(
           'external-entry retirement requires NormalPlayerPlaybackGate.shared');
+
+  /// 旧 usecase 構成は authoritative な live playback state を持たないため、
+  /// adoption は常に no-op（null/null/empty stream）。gate の never-throw
+  /// 契約は維持する（harness VM は引き続き構築できる）。
+  @override
+  Future<PersistentLiveSession?> adoptLiveSession({
+    required String sessionId,
+    required String contentId,
+  }) async =>
+      null;
+
+  @override
+  PersistentLiveSession? liveSnapshotFor({required String sessionId}) => null;
+
+  @override
+  Stream<PersistentLiveUpdate> liveUpdates({required String sessionId}) =>
+      const Stream<PersistentLiveUpdate>.empty();
 
   @override
   void dispose() => _startPlayback.dispose();
@@ -409,6 +501,96 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
           positionSaveErrorType: saved.errorType,
         );
       });
+
+  PlaybackOwnerKey _ownerOf(String sessionId) =>
+      PlaybackOwnerKey.normalPlayer(sessionId);
+
+  PersistentLiveSession? _toLiveSession(ActivePlaybackSnapshot snapshot) {
+    final target = snapshot.target;
+    if (target is! PersistentTarget) {
+      // INV-13により到達不能な防御的分岐（adoptActivePersistentはPersistent
+      // targetでのみ成功する）。
+      return null;
+    }
+    return PersistentLiveSession(
+      contentId: target.contentId,
+      hasLiveStatus: snapshot.hasLiveStatus,
+      isPlaying: snapshot.isPlaying,
+      position: snapshot.position,
+      ttsStatus: snapshot.ttsStatus,
+      voice: snapshot.voice,
+      epoch: snapshot.epoch,
+    );
+  }
+
+  @override
+  Future<PersistentLiveSession?> adoptLiveSession({
+    required String sessionId,
+    required String contentId,
+  }) async {
+    final snapshot = await _transport.adoptActivePersistent(
+      target: PersistentTarget.ofRegisteredSessionContentId(contentId),
+      newOwner: _ownerOf(sessionId),
+      accounting: _accounting,
+    );
+    if (snapshot == null) return null;
+    if (!snapshot.isPlaying) {
+      // INV-15: adoption performs at most one DB write, only when the
+      // adopted session is not known to be playing (hasLiveStatus==false is
+      // conservatively treated as not-playing — §8.2.3). Never throws;
+      // §13.2: a failure here does not cancel the live UI attachment, so the
+      // result is used for logging only.
+      final saved = await _policyFor(contentId)
+          .persistStopPosition(position: snapshot.position);
+      // FINAL Design §13.2/§14.3 names persistedStopPosition/persistErrorType
+      // as fields of the single event `playback_live_session_adopted`. That
+      // event is emitted by SharedPlaybackTransport (see
+      // shared_playback_transport.dart _logAdopted) at the moment adoption
+      // completes, which is architecturally *before* this DB write can have
+      // happened — the Transport is deliberately DB/repository-independent
+      // (see its own class doc comment) and this write happens one layer up,
+      // in this gate/backend. Emitting one physically-atomic event with both
+      // halves would require either the Transport awaiting persistence
+      // (crossing its settled DB-independence boundary) or exposing
+      // Transport-internal fields (previousOwner, usageFlushSucceeded/
+      // usageFlushErrorType) that are not part of ActivePlaybackSnapshot,
+      // out through a widened return contract. Both are out of scope for a
+      // narrow correction against an already-reviewed RT-4 API. This is
+      // recorded as a design erratum: the schema is split across two
+      // correlated events instead of one. newOwner/epoch are included here
+      // specifically so a log consumer can join this event back to the
+      // `playback_live_session_adopted` event emitted for the same adoption.
+      unawaited(DebugLogger.instance
+          .logEvent('playback_live_session_adopt_persisted', {
+        'newOwner': _ownerOf(sessionId).toString(),
+        'epoch': snapshot.epoch,
+        'contentId': contentId,
+        'persistedStopPosition': saved.succeeded,
+        'persistErrorType': saved.errorType,
+      }));
+    }
+    return _toLiveSession(snapshot);
+  }
+
+  @override
+  PersistentLiveSession? liveSnapshotFor({required String sessionId}) {
+    final s = _transport.activeSnapshot;
+    if (s == null || s.owner != _ownerOf(sessionId)) return null;
+    return _toLiveSession(s);
+  }
+
+  @override
+  Stream<PersistentLiveUpdate> liveUpdates({required String sessionId}) {
+    final owner = _ownerOf(sessionId);
+    return _transport.acceptedPositions // 注意: acceptedPositions（:225相当）
+        // であって positionObservations ではない（[RT-2]）。
+        .where((e) => e.owner == owner)
+        .map((e) => PersistentLiveUpdate(
+              position: e.charPosition,
+              isPlaying: e.isPlaying,
+              ttsStatus: e.ttsStatus,
+            ));
+  }
 
   // Transport は app-shared provider の所有物。gate からは破棄しない。
   @override

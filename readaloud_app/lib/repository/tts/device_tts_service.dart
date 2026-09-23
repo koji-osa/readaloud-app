@@ -455,12 +455,27 @@ class TtsAudioHandler extends BaseAudioHandler
         // NEW-Q1=A: 他 live owner が無い terminal close では media notification
         // を完全に消す（audio_service 0.18 系で使える最小操作。実機表示は
         // T-C3d の Device Acceptance で確認する）。
-        mediaItem.add(null);
+        // INV-14: mediaItem.add(null) は audio_service が
+        // _observeMediaItem 内で黙って破棄する（package が
+        // null mediaItem を drop するため。RT-1/audio_service.dart:1029-1033）。
+        // 代わりに空の MediaItem を送ると notification を再表示させて
+        // しまい INV-14 に違反するため、mediaItem を一切送らない。
         playbackState.add(playbackState.value.copyWith(
           playing: false,
           processingState: AudioProcessingState.idle,
           controls: [],
         ));
+        // Detailed Design v1.2 FINAL §14.3: media_terminal_teardown。
+        // 純粋な診断イベント（挙動には影響しない）。foregroundExitRequested は
+        // main.dart の kAudioServiceConfig.androidStopForegroundOnPause が
+        // true であること（A1）を指す定数。mediaItemCleared は常に false —
+        // INV-14 によりこの経路は mediaItem を一切送らないため、
+        // 「メタデータをクリアした」と主張しない（設計の明示的要求）。
+        unawaited(DebugLogger.instance.logEvent('media_terminal_teardown', {
+          'disposition': notificationDisposition.name,
+          'foregroundExitRequested': true,
+          'mediaItemCleared': false,
+        }));
       case NotificationDisposition.handoff:
         // 旧 owner の media controls（Play）を無効化する。次 owner の speak()
         // が新しい media state を設定する。

@@ -38,6 +38,16 @@ final class PersistentTarget extends PlaybackTarget {
       PersistentTarget._(contentId);
 
   final String contentId;
+
+  /// Detailed Design v1.2 FINAL §8.2.7: contentId による value equality。
+  /// Transport は contentId の意味を知らないまま PlaybackTarget を値比較できる。
+  /// TransientTarget は対象外（[NR-3] / INV-13、型レベルで adoption から除外）。
+  @override
+  bool operator ==(Object other) =>
+      other is PersistentTarget && other.contentId == contentId;
+
+  @override
+  int get hashCode => contentId.hashCode;
 }
 
 final class PlaybackVoiceParams {

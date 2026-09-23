@@ -278,7 +278,6 @@ Future<_Env> _pumpEnv(WidgetTester tester) async {
             updateContent: UpdateContentUseCase(contentRepo),
             saveContent: SaveContentUseCase(contentRepo),
             checkTtsLimit: CheckTtsLimitUseCase(settingsRepo: settingsRepo),
-            positionStream: positions.stream,
             getCurrentPosition: () => env.handlerPosition,
             playbackRepo: playbackRepo,
             settingsRepo: settingsRepo,

@@ -138,6 +138,46 @@ final class PositionObservation {
   final PlaybackOwnerKey? acceptedOwner;
 }
 
+/// Transport が保持する live playback の読み取り専用 snapshot
+/// （Detailed Design v1.2 FINAL §8.2.1 / §8.2.3, [RT-3] [RT-6]）。
+/// VM は Transport の内部実装を直接覗かない。
+final class ActivePlaybackSnapshot {
+  const ActivePlaybackSnapshot({
+    required this.owner,
+    required this.target,
+    required this.hasLiveStatus,
+    required this.isPlaying,
+    required this.position,
+    required this.ttsStatus,
+    required this.voice,
+    required this.epoch,
+  });
+
+  final PlaybackOwnerKey owner;
+  final PlaybackTarget target;
+
+  /// この playback session で「受理済み position event を1件以上観測済み」か。
+  /// false の間、[isPlaying] / [ttsStatus] は観測値ではなく保守的な既定値である
+  /// （INV-16）。
+  final bool hasLiveStatus;
+
+  /// hasLiveStatus == false のとき必ず false（前 session の値を継承しない）。
+  final bool isPlaying;
+
+  /// 常に _currentPosition() 由来（session 境界に依存しない handler 権威値）。
+  final int position;
+
+  /// hasLiveStatus == false のとき必ず TtsStatus.stopped。
+  final TtsStatus ttsStatus;
+
+  /// 実際に発話中のパラメータ。_activeRequest.voice 由来（speed が authoritative）。
+  final PlaybackVoiceParams voice;
+
+  /// start / clear ごとに単調増加。adoption では進めない
+  /// （owner ではなく playback session を識別する）。
+  final int epoch;
+}
+
 /// [SharedPlaybackTransport.exclusive] の区間内でだけ使える操作。
 /// 区間内から Transport の public start/pause/stop を呼ぶと自己待ちになるため、
 /// 必ずこちらを使う。
@@ -158,8 +198,22 @@ abstract interface class TransportOps {
   Future<ActivePlaybackRetirement> retireActiveForExternalEntryUnlocked({
     required TeardownReason reason,
   });
+
+  /// [target] と一致する live Persistent session を [newOwner] へ再所有させる
+  /// （Detailed Design v1.2 FINAL §8.2.4 / §8.2.5）。
+  /// - active なし / target 不一致 / Transient target -> null（完全 no-op）
+  /// - 一致 -> ownership と accounting を移譲し snapshot を返す
+  /// TtsService には一切触れない（INV-11）。二重再生は構造的に起こり得ない。
+  Future<ActivePlaybackSnapshot?> adoptActivePersistentUnlocked({
+    required PersistentTarget target,
+    required PlaybackOwnerKey newOwner,
+    required PlaybackUsageAccounting accounting,
+  });
   int get currentPosition;
   PlaybackOwnerKey? get activeOwner;
+
+  /// 現在 active な playback の snapshot（なければ null）。同期。
+  ActivePlaybackSnapshot? get activeSnapshot;
 }
 
 /// Normal Player / Transient 共通の再生 Transport（Detailed Design v1.2 FINAL §6）。
@@ -200,6 +254,18 @@ class SharedPlaybackTransport implements TransportOps {
   bool _hasCalledSpeak = false;
   bool _accept = false;
 
+  // Detailed Design v1.2 FINAL §8.2.2 [RT-3]。
+  // startUnlocked / _clearActive で ++ する。owner ではなく playback session を
+  // 識別する（adoption では進めない）。
+  int _sessionEpoch = 0;
+
+  /// この playback session で最後に「受理された」position event。
+  /// null == 「この session ではまだ受理 event が無い」。
+  /// startUnlocked / _clearActive / start失敗rollback でのみ null に戻り、
+  /// _onPosition の accept gate を通過した後にのみ書き込まれるため、前 session
+  /// の値が新 session の状態として観測されることは構造的に起こり得ない（INV-16）。
+  TtsPlaybackPosition? _lastAcceptedPosition;
+
   // ---- exclusive chain -------------------------------------------------
   // 何も実行中・待機中でなければ body を同期的に開始し、そうでなければ
   // 投入順に直列実行する。chain 自身は常に正常完了させ、1回の失敗で以後の
@@ -220,6 +286,30 @@ class SharedPlaybackTransport implements TransportOps {
   /// （external entry は [retireActiveForExternalEntry] を使う）。
   @visibleForTesting
   PlaybackRequest? get activeRequestForDebug => _activeRequest;
+
+  @override
+  ActivePlaybackSnapshot? get activeSnapshot => _snapshot();
+
+  /// Detailed Design v1.2 FINAL §8.2.3。position は常に _currentPosition()、
+  /// voice は常に _activeRequest.voice。isPlaying/ttsStatus は
+  /// _lastAcceptedPosition があればその観測値、無ければ保守的な既定値
+  /// （安全な方向 — §8.2.3 参照）。
+  ActivePlaybackSnapshot? _snapshot() {
+    final owner = _activeOwner;
+    final request = _activeRequest;
+    if (owner == null || request == null) return null;
+    final last = _lastAcceptedPosition;
+    return ActivePlaybackSnapshot(
+      owner: owner,
+      target: request.target,
+      hasLiveStatus: last != null,
+      isPlaying: last?.isPlaying ?? false,
+      ttsStatus: last?.ttsStatus ?? TtsStatus.stopped,
+      position: _currentPosition(),
+      voice: request.voice,
+      epoch: _sessionEpoch,
+    );
+  }
 
   /// D15 受理後・owner 刻印済みの position event。
   Stream<OwnedPositionEvent> get acceptedPositions => _accepted.stream;
@@ -293,6 +383,19 @@ class SharedPlaybackTransport implements TransportOps {
       exclusive(
           (ops) => ops.retireActiveForExternalEntryUnlocked(reason: reason));
 
+  /// Detailed Design v1.2 FINAL §8.2.4。[target] と一致する live Persistent
+  /// session を [newOwner] へ再所有させる（DA-2）。TtsService には一切触れない。
+  Future<ActivePlaybackSnapshot?> adoptActivePersistent({
+    required PersistentTarget target,
+    required PlaybackOwnerKey newOwner,
+    required PlaybackUsageAccounting accounting,
+  }) =>
+      exclusive((ops) => ops.adoptActivePersistentUnlocked(
+            target: target,
+            newOwner: newOwner,
+            accounting: accounting,
+          ));
+
   // ---- TransportOps ----------------------------------------------------
 
   @override
@@ -307,6 +410,10 @@ class SharedPlaybackTransport implements TransportOps {
     _activeAccounting = accounting;
     _hasCalledSpeak = false;
     _accept = false;
+    // [RT-3] INV-16: 新しい playback session の開始。前 session の観測値が
+    // 新 session の状態として観測されることを構造的に防ぐ。
+    _lastAcceptedPosition = null;
+    _sessionEpoch++;
     try {
       accounting.onPlaybackStarted(
         owner: owner,
@@ -338,6 +445,9 @@ class SharedPlaybackTransport implements TransportOps {
       }
       _hasCalledSpeak = false;
       _accept = false;
+      // [RT-3]: rollback は開始前の状態へ戻す。失敗した session の観測値を
+      // 残さない（epoch は startUnlocked 開始時に既に進めているため戻さない）。
+      _lastAcceptedPosition = null;
       unawaited(DebugLogger.instance.logEvent('playback_start_failed', {
         'owner': owner.toString(),
         'errorType': e.runtimeType.toString(),
@@ -463,6 +573,97 @@ class SharedPlaybackTransport implements TransportOps {
     );
   }
 
+  @override
+  Future<ActivePlaybackSnapshot?> adoptActivePersistentUnlocked({
+    required PersistentTarget target,
+    required PlaybackOwnerKey newOwner,
+    required PlaybackUsageAccounting accounting,
+  }) async {
+    final owner = _activeOwner;
+    if (owner == null) {
+      _logAdoptSkipped('noActive', newOwner);
+      return null;
+    }
+    final request = _activeRequest;
+    if (request == null) {
+      _logAdoptSkipped('noActive', newOwner);
+      return null;
+    }
+
+    final t = request.target;
+    if (t is! PersistentTarget) {
+      _logAdoptSkipped('transientTarget', newOwner);
+      return null;
+    }
+    if (t != target) {
+      _logAdoptSkipped('targetMismatch', newOwner);
+      return null;
+    }
+
+    // ---- Case H1 (§12): 同一 session の二重 adoption のみ。reopen では成立しない ----
+    if (owner == newOwner) {
+      _logAdoptSkipped('sameOwner', newOwner);
+      return _snapshot();
+    }
+
+    // ---- Case H2 (§12): 正当な ownership handoff --------------------------
+    // vvv ここから onPlaybackStarted までの区間に await を置かないこと
+    // （INV-12 / Race M、§8.2.5 / §8.2.6）。
+    final flush = _flushUsage(owner);
+
+    _activeOwner = newOwner;
+    _activeAccounting = accounting;
+    accounting.onPlaybackStarted(
+      owner: newOwner,
+      totalChars: request.text.length,
+      startPosition: _currentPosition(),
+    );
+    // _hasCalledSpeak / _accept は保持する: live session は既に D15 受理済み。
+    // _lastAcceptedPosition も保持する: 同一 playback session の真の観測値
+    // （§8.2.2）。_sessionEpoch は進めない: 同一 playback session が継続している
+    // ため。
+    // ^^^ ここまで await 無し ^^^
+
+    // 旧 owner の永続化結果は、ここで初めて観測する（log / 結果報告のためだけ）。
+    final usage = flush is Future<UsageFlushResult> ? await flush : flush;
+
+    final snapshot = _snapshot();
+    _logAdopted(
+      previousOwner: owner,
+      newOwner: newOwner,
+      snapshot: snapshot,
+      usage: usage,
+    );
+    return snapshot;
+  }
+
+  void _logAdoptSkipped(String reason, PlaybackOwnerKey requestedOwner) {
+    unawaited(
+        DebugLogger.instance.logEvent('playback_live_session_adopt_skipped', {
+      'reason': reason,
+      'requestedOwner': requestedOwner.toString(),
+    }));
+  }
+
+  void _logAdopted({
+    required PlaybackOwnerKey previousOwner,
+    required PlaybackOwnerKey newOwner,
+    required ActivePlaybackSnapshot? snapshot,
+    required UsageFlushResult usage,
+  }) {
+    unawaited(DebugLogger.instance.logEvent('playback_live_session_adopted', {
+      'previousOwner': previousOwner.toString(),
+      'newOwner': newOwner.toString(),
+      'target': snapshot?.target.toString(),
+      'hasLiveStatus': snapshot?.hasLiveStatus,
+      'isPlaying': snapshot?.isPlaying,
+      'position': snapshot?.position,
+      'epoch': snapshot?.epoch,
+      'usageFlushSucceeded': usage.succeeded,
+      'usageFlushErrorType': usage.errorType,
+    }));
+  }
+
   /// [owner]（= 現在の activeOwner）を恒久 retire する共通手順:
   /// accounting flush → TTS stop → resume fence → owner/request/accounting/D15 clear。
   Future<ForceStopOutcome> _retireOwnerUnlocked(
@@ -520,6 +721,10 @@ class SharedPlaybackTransport implements TransportOps {
     _activeAccounting = null;
     _hasCalledSpeak = false;
     _accept = false;
+    // [RT-3] INV-16: session 境界。次に始まる playback session が前 session
+    // の観測値を継承しないようにする。
+    _lastAcceptedPosition = null;
+    _sessionEpoch++;
   }
 
   void _logExternalRetirement(PlaybackOwnerKey? owner, TeardownReason reason) {
@@ -574,6 +779,9 @@ class SharedPlaybackTransport implements TransportOps {
       ));
     }
     if (!accepted) return;
+    // [RT-3]: accept gate を通過した後にのみ書き込む。adoption はこれを
+    // 意図的にリセットしない（同一 playback session の継続のため、§9.1）。
+    _lastAcceptedPosition = data;
     _activeAccounting?.onPositionAdvanced(data.charPosition);
     if (!_accepted.isClosed) {
       _accepted.add(OwnedPositionEvent(
