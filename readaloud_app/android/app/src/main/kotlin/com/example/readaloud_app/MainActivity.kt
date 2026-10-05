@@ -236,6 +236,46 @@ class MainActivity : AudioServiceActivity() {
             }
         }
 
+        // Sources Folder Source の直下 children metadata 列挙専用（本文は読まない）。
+        val sourcesFolderChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SOURCES_FOLDER_METHOD_CHANNEL,
+        )
+        sourcesFolderChannel.setMethodCallHandler { call, result ->
+            if (call.method == "listDirectChildren") {
+                val treeUri = call.argument<String>("treeUri")
+                if (treeUri == null) {
+                    result.error("invalid_argument", "treeUri is required", null)
+                } else {
+                    Thread {
+                        var children: List<Map<String, Any?>>? = null
+                        var errorCode = "unavailable"
+                        try {
+                            children = SourcesFolderListing.listDirectChildren(contentResolver, treeUri)
+                        } catch (e: SecurityException) {
+                            errorCode = "permission_denied"
+                        } catch (e: Exception) {
+                            errorCode = "unavailable"
+                        }
+                        val resolved = children
+                        mainHandler.post {
+                            try {
+                                if (resolved != null) {
+                                    result.success(resolved)
+                                } else {
+                                    result.error(errorCode, null, null)
+                                }
+                            } catch (t: Throwable) {
+                                // Activity/engine が既に detach している場合は無視する。
+                            }
+                        }
+                    }.start()
+                }
+            } else {
+                result.notImplemented()
+            }
+        }
+
         // Dart isolateが既に生存していた場合（cached engine）、Dart側の
         // 通知handlerは既に登録済みの可能性が高いため、ここでも通知を
         // 試みる。genuine cold startの場合はDart側handlerが未登録のため
@@ -285,5 +325,7 @@ class MainActivity : AudioServiceActivity() {
             "com.example.readaloud_app/external_input"
         private const val NATIVE_SHARE_OBSERVABILITY_METHOD_CHANNEL =
             "com.example.readaloud_app/native_share_observability"
+        private const val SOURCES_FOLDER_METHOD_CHANNEL =
+            "com.example.readaloud_app/sources_folder"
     }
 }

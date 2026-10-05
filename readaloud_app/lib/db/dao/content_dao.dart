@@ -35,6 +35,18 @@ class ContentDao {
     return maps.map((m) => Content.fromMap(m)).toList();
   }
 
+  /// 指定 sourceType の source_url 集合だけを返す（body は読まない）。
+  Future<Set<String>> sourceUrlsOfType(String sourceType) async {
+    final db = await _dbHelper.database;
+    final rows = await db.query(
+      'contents',
+      columns: ['source_url'],
+      where: 'source_type = ? AND source_url IS NOT NULL',
+      whereArgs: [sourceType],
+    );
+    return rows.map((r) => r['source_url'] as String).toSet();
+  }
+
   Future<Content?> getById(String id) async {
     final db = await _dbHelper.database;
     final maps = await db.query(

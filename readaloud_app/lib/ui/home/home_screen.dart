@@ -11,6 +11,7 @@ import '../../model/normal_player_session.dart';
 import '../../providers.dart';
 import '../add/add_screen.dart';
 import '../settings/settings_screen.dart';
+import '../sources/sources_screen.dart';
 import '../player/player_screen.dart';
 import 'widgets/content_card.dart';
 import 'widgets/tts_usage_banner.dart';
@@ -125,13 +126,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         color: Color(0xFFF0F0F8),
                       ),
                     ),
-                    IconButton(
-                      icon:
-                          const Icon(Icons.settings, color: Color(0xFF8888AA)),
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const SettingsScreen()),
-                      ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Sources',
+                          icon: const Icon(Icons.folder_outlined,
+                              color: Color(0xFF8888AA)),
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                                builder: (_) => const SourcesScreen()),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.settings,
+                              color: Color(0xFF8888AA)),
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                                builder: (_) => const SettingsScreen()),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

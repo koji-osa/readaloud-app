@@ -53,4 +53,5 @@ class SettingKeys {
   static const String tocPrompt            = 'toc_prompt'; // REQ-031
   static const String tablePrompt          = 'table_prompt'; // REQ-031
   static const String obsidianVaultUri     = 'obsidian_vault_uri';
+  static const String sourcesFolderUri     = 'sources_folder_uri';
 }
