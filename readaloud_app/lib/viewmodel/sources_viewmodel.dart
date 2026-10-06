@@ -66,6 +66,8 @@ class SourcesLoaded extends SourcesScreenData {
 /// 設定済みフォルダの直下を列挙し、Recent 表示用の状態を組み立てる。
 /// 本文は読まない。一覧生成は metadata のみで行う。
 final sourcesScreenProvider = FutureProvider.autoDispose<SourcesScreenData>((ref) async {
+  // 計測範囲は provider entry から（Sources open → direct-child Recent list）。
+  final total = Stopwatch()..start();
   final settings = ref.read(sourcesSettingsProvider);
   final vault = ref.read(sourcesVaultProvider);
   final lister = ref.read(sourcesFolderListerProvider);
@@ -74,10 +76,12 @@ final sourcesScreenProvider = FutureProvider.autoDispose<SourcesScreenData>((ref
   final folderUri = await settings.get(SettingKeys.sourcesFolderUri);
   if (folderUri == null) return const SourcesNotConfigured();
 
+  final folderNameWatch = Stopwatch()..start();
   final folderName = await _folderNameOrNull(vault, folderUri);
-  final total = Stopwatch()..start();
-  final list = Stopwatch()..start();
+  final folderNameMs = folderNameWatch.elapsedMilliseconds;
 
+  // listMs は native direct-child listing の時間のみ。
+  final list = Stopwatch()..start();
   final List<FolderChild> children;
   try {
     children = await lister.listDirectChildren(folderUri);
@@ -90,11 +94,16 @@ final sourcesScreenProvider = FutureProvider.autoDispose<SourcesScreenData>((ref
 
   final now = DateTime.now();
   final selection = RecentFolderGrouping.select(children, now: now);
+  final lookupWatch = Stopwatch()..start();
   final savedUris = await lookup.savedFolderSourceUris();
+  final lookupMs = lookupWatch.elapsedMilliseconds;
 
+  // ログには URI・ファイル名・本文を含めない（件数と時間のみ）。
   unawaited(DebugLogger.instance.logEvent('source_discovery_completed', {
     'totalMs': total.elapsedMilliseconds,
+    'folderNameMs': folderNameMs,
     'listMs': listMs,
+    'lookupMs': lookupMs,
     'entryCount': children.length,
     'recentCount': selection.groups.fold<int>(0, (n, g) => n + g.items.length),
     'authority': Uri.tryParse(folderUri)?.host ?? 'unknown',
