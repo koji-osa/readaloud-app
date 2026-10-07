@@ -192,7 +192,7 @@ Future<_Env> _pumpEnv(WidgetTester tester) async {
 
   await tester.pumpWidget(ProviderScope(
     overrides: [
-      quickListenViewModelProvider.overrideWith((ref) => _TestVm(
+      quickListenViewModelProvider.overrideWith((ref) => QuickListenViewModel(
             transport: transport,
             defaultsReader: _FakeDefaults(),
             promotion: LibraryPromotionService(
@@ -262,19 +262,6 @@ class _HarnessState extends ConsumerState<_Harness> {
   @override
   Widget build(BuildContext context) =>
       const Scaffold(body: Center(child: Text('HOME_MARKER')));
-}
-
-class _TestVm extends QuickListenViewModel {
-  _TestVm({
-    required super.transport,
-    required super.defaultsReader,
-    required super.promotion,
-  });
-
-  @override
-  void start(QuickListenSession session) {
-    scheduleMicrotask(() => super.start(session));
-  }
 }
 
 class _FakeDefaults implements PlaybackDefaultsReader {

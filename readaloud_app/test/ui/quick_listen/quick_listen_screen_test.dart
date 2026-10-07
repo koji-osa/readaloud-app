@@ -1,11 +1,8 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/model/content.dart';
 import 'package:readaloud_app/model/playback_request.dart';
-import 'package:readaloud_app/model/quick_listen_session.dart';
 import 'package:readaloud_app/model/playback_state.dart';
 import 'package:readaloud_app/repository/content_repository.dart';
 import 'package:readaloud_app/repository/playback_repository.dart';
@@ -20,6 +17,15 @@ import 'package:readaloud_app/viewmodel/quick_listen_viewmodel.dart';
 
 // Shared Player Core Slice 5: Transient 画面
 // T-L1（lifecycle）/ T-L2（terminal close: × / system back）/ PD-2 / PD-3
+//
+// RA-QL-LIFECYCLE-FIX-01: 以前はこのファイルの `_TestVm`（start()のstate反映を
+// 1 microtask遅延させるsubclass）が、`QuickListenScreen.initState()`の同期
+// `start()`呼び出しが実機でも引き起こす「Tried to modify a provider while the
+// widget tree was building」をテスト上だけ隠していた（実際には実機でも発生する
+// pre-existing defectだった）。本番側の修正（`quick_listen_screen.dart`の
+// `initState()`がstart()を1 microtask遅延させ、その間の最初のbuild()は
+// widget構築時のデータから直接表示する）に合わせ、ここでは本物の
+// `QuickListenViewModel`をそのまま使う（`_TestVm`は廃止）。
 void main() {
   late _RecordingTts tts;
   late _RecordingFence fence;
@@ -50,7 +56,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          quickListenViewModelProvider.overrideWith((ref) => _TestVm(
+          quickListenViewModelProvider.overrideWith((ref) => QuickListenViewModel(
                 transport: transport,
                 defaultsReader: _FakeDefaults(),
                 promotion: LibraryPromotionService(
@@ -83,6 +89,12 @@ void main() {
       ),
     );
     await tester.tap(find.text('HOME_MARKER'));
+    // RA-QL-LIFECYCLE-FIX-01 回帰: push直後の最初のpumpでbuild中のprovider
+    // 変更例外が出ないこと（出ればflutter_testが自動的にtestを失敗させるが、
+    // ここで明示的に検証し、何を保証しているかを示す）。
+    await tester.pump();
+    expect(tester.takeException(), isNull,
+        reason: 'QuickListenScreen mount時に例外が発生しないこと');
     await tester.pumpAndSettle();
     expect(find.byType(QuickListenScreen), findsOneWidget);
   }
@@ -129,6 +141,55 @@ void main() {
       ),
     );
     expect(find.text('Sourceのタイトル'), findsOneWidget);
+  });
+
+  testWidgets(
+      'RA-QL-LIFECYCLE-FIX-01 A: initialRequest経路でmountしてもbuild中の'
+      'provider変更例外が発生せず、最初のbuild（provider反映前）から既に'
+      '本文が表示される（空表示が出ない）', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          quickListenViewModelProvider.overrideWith((ref) => QuickListenViewModel(
+                transport: transport,
+                defaultsReader: _FakeDefaults(),
+                promotion: LibraryPromotionService(
+                  saveContent: SaveContentUseCase(_NoopContentRepository()),
+                  playbackRepo: _ThrowingPlaybackRepository(),
+                  defaultsReader: _FakeDefaults(),
+                ),
+              )),
+        ],
+        child: MaterialApp(
+          home: QuickListenScreen(
+            initialRequest: PlaybackRequest(
+              target: const TransientTarget(),
+              text: '最初のbuildから見えるべき本文',
+              startPosition: 0,
+              source: const SourceDescriptor(sourceType: 'folder'),
+            ),
+          ),
+        ),
+      ),
+    );
+    // ここが最初のbuild（まだ1 microtaskも経過していない）。例外なし、かつ
+    // provider反映前でも本文が既に見えていることを確認する（空表示が出ない）。
+    expect(tester.takeException(), isNull);
+    expect(find.text('最初のbuildから見えるべき本文'), findsOneWidget);
+
+    await tester.pumpAndSettle();
+    expect(find.text('最初のbuildから見えるべき本文'), findsOneWidget);
+    expect(vmState(tester).session, isNotNull);
+  });
+
+  testWidgets(
+      'RA-QL-LIFECYCLE-FIX-01 B: initialText経路でも同じ例外が起きず、'
+      'session startは1回だけ', (tester) async {
+    await pumpApp(tester); // request:null → initialText経路
+    final startedEvents = DebugLogger.testSink!
+        .where((l) => l.contains('event=quick_listen_session_started'))
+        .toList();
+    expect(startedEvents, hasLength(1));
   });
 
   testWidgets('T-L1: lifecycle paused/resumed ではcontroller状態は不変でstopされない',
@@ -202,22 +263,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(tts.calls, ['stop', 'speak:0']);
   });
-}
-
-/// QuickListenScreen.initState() の同期 start() は widget test 環境でのみ
-/// Riverpod の build 中変更検知に掛かるため、既存 navigation test と同じく
-/// start の state 反映だけを1 microtask 遅延させる。
-class _TestVm extends QuickListenViewModel {
-  _TestVm({
-    required super.transport,
-    required super.defaultsReader,
-    required super.promotion,
-  });
-
-  @override
-  void start(QuickListenSession session) {
-    scheduleMicrotask(() => super.start(session));
-  }
 }
 
 class _FakeDefaults implements PlaybackDefaultsReader {
