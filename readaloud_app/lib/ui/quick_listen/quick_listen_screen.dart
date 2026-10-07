@@ -37,24 +37,41 @@ class QuickListenScreen extends ConsumerStatefulWidget {
 }
 
 class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
-  String? _sessionId;
-  bool _closing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // ref.read()はinitState内でも安全（ref.watchのみ避ければよい）。
-    // postFrameCallbackを介さないことで、セッション未設定の空表示が一瞬
-    // 出てしまう問題も避けられる。
+  /// widget構築時点で確定する、この画面のsession（purely in-memoryな値オブジェクトの
+  /// 構築であり、provider変更ではないためbuild中でも安全）。
+  late final QuickListenSession _initialSession = () {
     final request = widget.initialRequest;
-    final session = request != null
+    return request != null
         ? QuickListenSession(request: request)
         : QuickListenSession.fromSharedText(
             widget.initialText!,
             title: widget.initialTitle,
           );
-    _sessionId = session.id;
-    ref.read(quickListenViewModelProvider.notifier).start(session);
+  }();
+
+  String get _sessionId => _initialSession.id;
+  bool _closing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // RA-QL-LIFECYCLE-FIX-01: Riverpodは新規mount時のbuild中（widget tree
+    // がbuild-lock下にある間）のprovider変更を許さない（実機Device
+    // Acceptanceで確認。initStateもこのlock下で実行され得る）。
+    //
+    // 最初のbuild()はquickListenViewModelProviderをwatchするが、session
+    // はまだ反映されていないため、widget構築時に確定済みの[_initialSession]
+    // から直接表示する（空表示を避ける。詳細はbuild()参照）。provider への
+    // start()反映は、最初のbuild()がwatchを確立しbuildScopeが完了した直後
+    // まで1 microtaskだけ遅延する（Timer/delay-msは使わない）。
+    //
+    // 最初のbuild()がこのscreen自身の中でquickListenViewModelProviderを
+    // 既にwatchしているため、このmicrotaskが実行される時点でprovider
+    // には有効なlistenerが存在し、autoDisposeで消えることもない。
+    Future.microtask(() {
+      if (!mounted) return;
+      ref.read(quickListenViewModelProvider.notifier).start(_initialSession);
+    });
     DebugLogger.instance.logEvent('quick_listen_screen_mounted', {
       'sessionId': _sessionId,
     });
@@ -104,8 +121,15 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(quickListenViewModelProvider);
     final vm = ref.read(quickListenViewModelProvider.notifier);
-    final session = state.session;
-    final request = session?.request;
+    // provider側がまだ自分のsessionを反映していない最初のbuildでは、
+    // widget構築時に確定済みの_initialSessionから直接表示する（空表示を
+    // 避ける）。再生操作（play/pause/save等）はprovider側のsessionが
+    // 必要なため、その間はno-opのままにする（start()は1microtask後に
+    // 必ず反映されるため、人間の操作がこのわずかな窓に間に合うことはない）。
+    final providerSession =
+        state.session?.id == _sessionId ? state.session : null;
+    final session = providerSession;
+    final request = providerSession?.request ?? _initialSession.request;
     // capability の判定はこの composition root でだけ行う（PD-2）。
     const caps = PlayerCapabilities.transientPhase1;
 
@@ -123,11 +147,8 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
     });
 
     // PD-3: Sourceタイトル、無ければ既存の自動タイトル（「Quick Listen」は表示しない）。
-    final heading = request == null
-        ? ''
-        : request.title ??
-            autoTitleFromBody(
-                request.text, request.source?.sourceType ?? 'share');
+    final heading = request.title ??
+        autoTitleFromBody(request.text, request.source?.sourceType ?? 'share');
 
     return PopScope(
       canPop: false,
@@ -166,7 +187,7 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: HighlightText(
-                    text: request?.text ?? '',
+                    text: request.text,
                     highlightPosition: state.highlightPosition,
                     onTap: caps.tapToSeek && session != null
                         ? (position) => vm.seekToPosition(position)
@@ -178,7 +199,7 @@ class _QuickListenScreenState extends ConsumerState<QuickListenScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 child: PlaybackControls(
                   isPlaying: state.isPlaying,
-                  speed: request?.voice.speed ?? 1.0,
+                  speed: request.voice.speed,
                   onPlay: session == null ? () {} : vm.play,
                   onPause: session == null ? () {} : vm.pause,
                   onSeekToStart: caps.seekToStart && session != null

@@ -1,10 +1,7 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:readaloud_app/model/content.dart';
-import 'package:readaloud_app/model/quick_listen_session.dart';
 import 'package:readaloud_app/repository/content_repository.dart';
 import 'package:readaloud_app/repository/settings_repository.dart';
 import 'package:readaloud_app/repository/tts/tts_service.dart';
@@ -32,15 +29,15 @@ import 'package:readaloud_app/viewmodel/quick_listen_viewmodel.dart';
 // GlobalKey経由でshare()を直接呼び出す（前面のQuickListenScreenに隠れた
 // ボタンをtapできない、という問題を避けるため）。
 //
-// 注記: QuickListenScreen.initState()は`ref.read(...).start(session)`を
-// 同期的に呼ぶ（quick_listen_screen.dart、本テストの修正対象外）。
-// flutter_riverpod 2.6.1はこのパターンをwidget test環境
-// （AutomatedTestWidgetsFlutterBinding）下でのみ
-// 「Tried to modify a provider while the widget tree was building」として
-// 検知する（実機では発生しない、テスト実行環境固有の制約）。本番コードを
-// 変更せずにこれを回避するため、start()の実際のstate反映だけを1
-// microtask遅延させるテスト専用のQuickListenViewModelサブクラスを使う
-// （pumpAndSettle()が収束を待つため、アサーション上は影響しない）。
+// 注記（RA-QL-LIFECYCLE-FIX-01）: 以前はここで「flutter_riverpod 2.6.1は
+// widget test環境でのみ『Tried to modify a provider while the widget tree
+// was building』を検知する（実機では発生しない）」として、start()の
+// 実際のstate反映を1 microtask遅延させるテスト専用のQuickListenViewModel
+// サブクラスで回避していた。実機Device Acceptanceでこの前提が誤りだと
+// 判明した（実機でも発生するpre-existing defectだった）ため、本番側を修正
+// （sessionのstart()を`QuickListenRouteTracker.openTransient()`がpushより
+// 前・widget treeの外で行うよう変更）し、ここでは本物の
+// `QuickListenViewModel`をそのまま使う（サブクラスは廃止）。
 void main() {
   setUp(() {
     DebugLogger.testSink = [];
@@ -215,7 +212,7 @@ void main() {
 
 QuickListenViewModel _buildTestViewModel() {
   final settingsRepo = _FakeSettingsRepository();
-  return _TestQuickListenViewModel(
+  return QuickListenViewModel(
     transport: SharedPlaybackTransport(
       tts: _FakeTtsService(),
       positionStream: const Stream.empty(),
@@ -232,21 +229,6 @@ class _NoopResumeFence implements PlaybackResumeFence {
   Future<void> discardResumeState({
     required NotificationDisposition notificationDisposition,
   }) async {}
-}
-
-/// start()の同期stateセットだけを1microtask遅延させるテスト専用subclass。
-/// 理由は本ファイル冒頭の注記を参照。close()等の他の挙動は一切変更しない。
-class _TestQuickListenViewModel extends QuickListenViewModel {
-  _TestQuickListenViewModel({
-    required super.transport,
-    required super.defaultsReader,
-    required super.promotion,
-  });
-
-  @override
-  void start(QuickListenSession session) {
-    scheduleMicrotask(() => super.start(session));
-  }
 }
 
 class _QuickListenNavHarness extends ConsumerStatefulWidget {
