@@ -2,7 +2,7 @@
 
 **最終更新:** 2026-10-08  
 **基準リリース:** v1.2.24 (`1.2.24+45`)  
-**基準 main:** `773a8f993d3837094b874ba5f78522bf53fac692`
+**v1.2.24 release source commit:** `773a8f993d3837094b874ba5f78522bf53fac692`
 
 ## このファイルについて
 
@@ -21,7 +21,7 @@ Raw URL基本形: `https://raw.githubusercontent.com/koji-osa/readaloud-app/main
 | アプリ | ReadAloud（Android向け情報摂取支援アプリ） |
 | 最新正式Release | `v1.2.24` |
 | Version | `1.2.24+45` |
-| main HEAD | `773a8f993d3837094b874ba5f78522bf53fac692` |
+| Current main HEAD | live GitHub `main`で確認（この索引には固定SHAを置かない） |
 | Flutter baseline | Flutter 3.44.0 / Dart 3.12 |
 | Android baseline | target/compile 36、build-tools 36.0.0 |
 | 状態管理 | Riverpod |
