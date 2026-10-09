@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../model/content.dart';
 import '../usecase/content/get_all_contents_usecase.dart';
@@ -94,7 +95,8 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
       });
       state = state.copyWith(
         isLoading: false,
-        errorMessage: 'コンテンツの取得に失敗しました: $e',
+        // 内部例外(DB/path 等)はユーザー表示に出さず、errorType は log に残す。
+        errorMessage: 'コンテンツの取得に失敗しました。再試行してください。',
       );
       return;
     }
@@ -108,7 +110,26 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
       'elapsedMs': stopwatch.elapsedMilliseconds,
     });
 
-    // Step 2: 進捗率の enrichment。失敗しても取得済みの一覧は消さない
+    // Step 2: 一覧を先に commit する。進捗の enrichment (playback lookup) が
+    // pending / stall / 失敗しても、取得済みの一覧は表示可能な状態にする。
+    // progressMap は取得済み Content に対応する既存値だけを引き継ぐ。
+    final ids = contents.map((c) => c.id).toSet();
+    final initialProgress = <String, double>{
+      for (final e in state.progressMap.entries)
+        if (ids.contains(e.key)) e.key: e.value,
+    };
+    state = state.copyWith(
+      contents: contents,
+      progressMap: initialProgress,
+      isLoading: false,
+    );
+    _log('content_list_load_commit', {
+      'requestId': requestId,
+      'filter': filter,
+      'contentCount': contents.length,
+    });
+
+    // Step 3: 進捗率の enrichment。個別の失敗は一覧に影響させない
     // (失敗した Content は進捗 0 のまま表示する)。
     final progressMap = <String, double>{};
     var enrichmentFailures = 0;
@@ -118,8 +139,15 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
         if (playback != null) {
           progressMap[c.id] = playback.progressPct;
         }
-      } catch (_) {
+      } catch (e) {
         enrichmentFailures++;
+        // contentId / title / body は記録しない。
+        _log('progress_enrichment_failure', {
+          'requestId': requestId,
+          'stage': 'playback_lookup',
+          'failureOrdinal': enrichmentFailures,
+          'errorType': e.runtimeType.toString(),
+        });
       }
       if (!_isLatest(requestId)) {
         _log('content_list_load_obsolete', {'requestId': requestId});
@@ -132,16 +160,12 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
       'failureCount': enrichmentFailures,
     });
 
-    state = state.copyWith(
-      contents: contents,
-      progressMap: progressMap,
-      isLoading: false,
-    );
-    _log('content_list_load_commit', {
-      'requestId': requestId,
-      'filter': filter,
-      'contentCount': contents.length,
-    });
+    if (!mapEquals(progressMap, state.progressMap)) {
+      state = state.copyWith(
+        progressMap: progressMap,
+        errorMessage: state.errorMessage,
+      );
+    }
   }
 
   // フィルターを変更

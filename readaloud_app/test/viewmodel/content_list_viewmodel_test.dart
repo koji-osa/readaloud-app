@@ -99,6 +99,82 @@ void main() {
       expect(vm.state.contents, isEmpty);
       expect(vm.state.isLoading, isFalse);
       expect(vm.state.errorMessage, isNotNull);
+      // 内部の例外文言(DB/path 等)をユーザー表示へ出さない。
+      expect(vm.state.errorMessage, isNot(contains('db open failed')));
+      expect(vm.state.errorMessage, isNot(contains('StateError')));
+    });
+
+    test('T2c playback lookup が pending のままでも一覧表示と isLoading=false が成立する',
+        () async {
+      final playback = Completer<PlaybackState?>();
+      contentRepo.onGetAll = () async => [_content('a'), _content('b')];
+      playbackRepo.onGet = (id) => id == 'a'
+          ? playback.future
+          : Future.value(PlaybackState(contentId: id, progressPct: 0.5));
+      final vm = build();
+      await pumpEventQueue();
+
+      // playback Completer 完了前。
+      expect(vm.state.contents.map((c) => c.id), ['a', 'b']);
+      expect(vm.state.isLoading, isFalse);
+      expect(vm.state.errorMessage, isNull);
+      expect(vm.state.progressMap, isEmpty);
+
+      playback.complete(PlaybackState(contentId: 'a', progressPct: 0.25));
+      await pumpEventQueue();
+      expect(vm.state.progressMap, {'a': 0.25, 'b': 0.5});
+      expect(vm.state.contents.map((c) => c.id), ['a', 'b']);
+      expect(vm.state.isLoading, isFalse);
+    });
+
+    test('T2d enrichment 中に新 request が来たら古い progress を commit しない', () async {
+      final oldPlayback = Completer<PlaybackState?>();
+      var call = 0;
+      contentRepo.onGetAll = () async => [_content('a')];
+      playbackRepo.onGet = (id) {
+        call++;
+        return call == 1
+            ? oldPlayback.future
+            : Future.value(PlaybackState(contentId: id, progressPct: 0.9));
+      };
+      final vm = build();
+      await pumpEventQueue();
+      await vm.loadContents(); // request 2 が最新
+
+      oldPlayback.complete(PlaybackState(contentId: 'a', progressPct: 0.1));
+      await pumpEventQueue();
+      expect(vm.state.progressMap, {'a': 0.9});
+    });
+
+    test('T2e enrichment 中の dispose 後に完了しても例外にならない', () async {
+      final playback = Completer<PlaybackState?>();
+      contentRepo.onGetAll = () async => [_content('a')];
+      playbackRepo.onGet = (_) => playback.future;
+      final vm = build();
+      await pumpEventQueue();
+      vm.dispose();
+
+      playback.complete(PlaybackState(contentId: 'a', progressPct: 0.3));
+      await pumpEventQueue();
+    });
+
+    test('T2f playback 例外は privacy-safe な errorType event で観測できる', () async {
+      contentRepo.onGetAll = () async => [_content('a'), _content('b')];
+      playbackRepo.onGet = (_) async => throw StateError('secret-detail');
+      build();
+      await pumpEventQueue();
+
+      final failures = DebugLogger.testSink!
+          .where((l) => l.startsWith('event=progress_enrichment_failure'))
+          .toList();
+      expect(failures, hasLength(2));
+      expect(failures.first, contains('errorType=StateError'));
+      expect(failures.first, contains('stage=playback_lookup'));
+      expect(failures.first, contains('requestId='));
+      for (final l in DebugLogger.testSink!) {
+        expect(l.contains('secret-detail'), isFalse);
+        expect(l.contains('t-a') || l.contains('b-a'), isFalse);
+      }
     });
 
     test('T2 playback enrichment failure は取得済みの一覧を消さない', () async {
