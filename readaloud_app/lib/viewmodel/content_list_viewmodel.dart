@@ -141,6 +141,9 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
         }
       } catch (e) {
         enrichmentFailures++;
+        // 一時的な lookup 失敗で、先行 commit に引き継いだ既知 progress を 0 へ後退させない。
+        final known = initialProgress[c.id];
+        if (known != null) progressMap[c.id] = known;
         // contentId / title / body は記録しない。
         _log('progress_enrichment_failure', {
           'requestId': requestId,
@@ -170,7 +173,18 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
 
   // フィルターを変更
   Future<void> changeFilter(String filter) async {
-    state = state.copyWith(selectedFilter: filter);
+    if (filter == state.selectedFilter) {
+      // 同一 filter は refresh 扱い。load 失敗でも既存の一覧/progress を保持する。
+      await loadContents();
+      return;
+    }
+    // filter 変更時は旧 filter 由来の一覧/progress を破棄する。新 filter の query が
+    // 失敗しても旧 filter の一覧を新 filter として表示しないため。
+    state = state.copyWith(
+      selectedFilter: filter,
+      contents: const [],
+      progressMap: const {},
+    );
     await loadContents();
   }
 
@@ -180,7 +194,9 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
       await _deleteContent.execute(id);
       await loadContents();
     } catch (e) {
-      state = state.copyWith(errorMessage: '削除に失敗しました: $e');
+      _log('content_mutation_error',
+          {'operation': 'delete', 'errorType': e.runtimeType.toString()});
+      state = state.copyWith(errorMessage: '削除に失敗しました。もう一度お試しください。');
     }
   }
 
@@ -190,7 +206,9 @@ class ContentListViewModel extends StateNotifier<ContentListState> {
       await _updateContent.execute(id: id, title: newTitle);
       await loadContents();
     } catch (e) {
-      state = state.copyWith(errorMessage: 'タイトルの更新に失敗しました: $e');
+      _log('content_mutation_error',
+          {'operation': 'update_title', 'errorType': e.runtimeType.toString()});
+      state = state.copyWith(errorMessage: 'タイトルの更新に失敗しました。もう一度お試しください。');
     }
   }
 }

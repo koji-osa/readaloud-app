@@ -33,8 +33,10 @@ class _FakeContentRepository implements ContentRepository {
   @override
   Future<List<Content>> getByStatus(String status) => onGetByStatus(status);
 
+  Future<Content?> Function(String id) onGetById = (_) async => null;
+
   @override
-  Future<Content?> getById(String id) async => null;
+  Future<Content?> getById(String id) => onGetById(id);
   @override
   Future<void> save(Content content) async {}
   @override
@@ -321,6 +323,102 @@ void main() {
       expect(committed, hasLength(1));
       expect(committed.single.isLoading, isFalse);
       expect(committed.single.contents, hasLength(1));
+    });
+
+    test('T6a filter 変更後の query 失敗で旧 filter の一覧/progress を残さない', () async {
+      contentRepo.onGetAll = () async => [_content('a'), _content('b')];
+      playbackRepo.onGet =
+          (id) async => PlaybackState(contentId: id, progressPct: 0.4);
+      contentRepo.onGetByStatus = (_) async => throw StateError('unread down');
+      final vm = build();
+      await pumpEventQueue();
+      expect(vm.state.progressMap, isNotEmpty);
+
+      await vm.changeFilter('unread');
+
+      expect(vm.state.selectedFilter, 'unread');
+      expect(vm.state.contents, isEmpty);
+      expect(vm.state.progressMap, isEmpty);
+      expect(vm.state.isLoading, isFalse);
+      expect(vm.state.errorMessage, isNotNull);
+    });
+
+    test('T6b same-filter refresh の query 失敗は既存の一覧/progress を保持する', () async {
+      var fail = false;
+      contentRepo.onGetAll = () async =>
+          fail ? throw StateError('refresh down') : [_content('a')];
+      playbackRepo.onGet =
+          (id) async => PlaybackState(contentId: id, progressPct: 0.4);
+      final vm = build();
+      await pumpEventQueue();
+
+      fail = true;
+      await vm.changeFilter('all');
+
+      expect(vm.state.selectedFilter, 'all');
+      expect(vm.state.contents.map((c) => c.id), ['a']);
+      expect(vm.state.progressMap, {'a': 0.4});
+      expect(vm.state.isLoading, isFalse);
+      expect(vm.state.errorMessage, isNotNull);
+    });
+
+    test('T7 enrichment 失敗でも前回取得済みの progress を 0 へ後退させない', () async {
+      var failLookup = false;
+      contentRepo.onGetAll = () async => [_content('a'), _content('b')];
+      playbackRepo.onGet = (id) async {
+        if (failLookup && id == 'a') throw StateError('transient');
+        return PlaybackState(contentId: id, progressPct: id == 'a' ? 0.4 : 0.7);
+      };
+      final vm = build();
+      await pumpEventQueue();
+      expect(vm.state.progressMap, {'a': 0.4, 'b': 0.7});
+      DebugLogger.testSink!.clear();
+
+      failLookup = true;
+      await vm.loadContents();
+
+      expect(vm.state.contents.map((c) => c.id), ['a', 'b']);
+      expect(vm.state.progressMap, {'a': 0.4, 'b': 0.7});
+      final failures = DebugLogger.testSink!
+          .where((l) => l.startsWith('event=progress_enrichment_failure'));
+      expect(failures, hasLength(1));
+      expect(failures.single, contains('errorType=StateError'));
+      expect(failures.single.contains('transient'), isFalse);
+    });
+
+    test('T7b lookup 成功時は新しい progress で更新する', () async {
+      var value = 0.4;
+      contentRepo.onGetAll = () async => [_content('a')];
+      playbackRepo.onGet =
+          (id) async => PlaybackState(contentId: id, progressPct: value);
+      final vm = build();
+      await pumpEventQueue();
+
+      value = 0.8;
+      await vm.loadContents();
+      expect(vm.state.progressMap, {'a': 0.8});
+    });
+
+    test('T8 delete/updateTitle の user message に内部例外を含めない', () async {
+      contentRepo.onGetAll = () async => [_content('a')];
+      contentRepo.onGetById = (_) async => throw StateError('secret-detail');
+      final vm = build();
+      await pumpEventQueue();
+
+      await vm.deleteContent('a');
+      final deleteMsg = vm.state.errorMessage;
+      expect(deleteMsg, isNotNull);
+      expect(deleteMsg, isNot(contains('secret-detail')));
+      expect(deleteMsg, isNot(contains('StateError')));
+
+      await vm.updateTitle('a', 'new');
+      final updateMsg = vm.state.errorMessage;
+      expect(updateMsg, isNotNull);
+      expect(updateMsg, isNot(contains('secret-detail')));
+      expect(updateMsg, isNot(contains('StateError')));
+      for (final l in DebugLogger.testSink!) {
+        expect(l.contains('secret-detail'), isFalse);
+      }
     });
 
     test('Observability: 本文/タイトルを含まない構造化 event を出す', () async {
