@@ -14,6 +14,7 @@ import '../settings/settings_screen.dart';
 import '../sources/sources_screen.dart';
 import '../player/player_screen.dart';
 import 'widgets/content_card.dart';
+import 'widgets/content_list_body.dart';
 import 'widgets/tts_usage_banner.dart';
 import '../../util/debug_logger.dart';
 
@@ -198,41 +199,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
               // コンテンツ一覧
               Expanded(
-                child: state.isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : state.contents.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'コンテンツがありません\n＋ボタンから追加してください',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Color(0xFF8888AA)),
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.all(14),
-                            itemCount: state.contents.length,
-                            itemBuilder: (context, index) {
-                              final content = state.contents[index];
-                              return ContentCard(
-                                content: content,
-                                onTap: () => _isSelectMode
-                                    ? _toggleSelect(content.id)
-                                    : _openPlayer(context, ref, content),
-                                onDelete: () =>
-                                    _confirmDelete(context, ref, content),
-                                onEditTitle: (currentTitle) =>
-                                    _showEditTitleDialog(
-                                        context, ref, content.id, currentTitle),
-                                progressPct:
-                                    state.progressMap[content.id] ?? 0.0,
-                                isSelectMode: _isSelectMode,
-                                isSelected: _selectedIds.contains(content.id),
-                                onLongPress: () => _isSelectMode
-                                    ? _toggleSelect(content.id)
-                                    : _enterSelectMode(content.id),
-                              );
-                            },
-                          ),
+                child: ContentListBody(
+                  state: state,
+                  onRetry: vm.loadContents,
+                  listBuilder: (context) => ListView.builder(
+                    padding: const EdgeInsets.all(14),
+                    itemCount: state.contents.length,
+                    itemBuilder: (context, index) {
+                      final content = state.contents[index];
+                      return ContentCard(
+                        content: content,
+                        onTap: () => _isSelectMode
+                            ? _toggleSelect(content.id)
+                            : _openPlayer(context, ref, content),
+                        onDelete: () => _confirmDelete(context, ref, content),
+                        onEditTitle: (currentTitle) => _showEditTitleDialog(
+                            context, ref, content.id, currentTitle),
+                        progressPct: state.progressMap[content.id] ?? 0.0,
+                        isSelectMode: _isSelectMode,
+                        isSelected: _selectedIds.contains(content.id),
+                        onLongPress: () => _isSelectMode
+                            ? _toggleSelect(content.id)
+                            : _enterSelectMode(content.id),
+                      );
+                    },
+                  ),
+                ),
               ),
             ],
           ),
