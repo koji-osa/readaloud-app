@@ -292,6 +292,12 @@ ReadAloud側で外部Delivery問題を独自Transport workaroundとして再実�
 
 ---
 
+## 10b. Release 署名
+
+Release 署名の継続性(期待 signer・fail-closed build・keystore の扱い)は `docs/RELEASE_SIGNING.md` を参照。
+
+---
+
 ## 11. Current Handoff / Research Logs
 
 Latest Handoff:
