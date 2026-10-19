@@ -1,5 +1,4 @@
 import '../../model/playback_request.dart';
-import '../../model/playback_state.dart';
 import '../../repository/playback_repository.dart';
 import 'save_playback_state_usecase.dart';
 
@@ -63,33 +62,28 @@ final class TransientPersistencePolicy implements PlaybackPersistencePolicy {
 final class PersistentPersistencePolicy implements PlaybackPersistencePolicy {
   PersistentPersistencePolicy({
     required PersistentTarget target,
+    // 停止位置の保存は SavePlaybackStateUseCase.executeStop へ移ったため未使用。
+    // 生成箇所（stop_playback_usecase / tracker / テスト）を変えないよう、
+    // constructor のシグネチャは維持している。
     required PlaybackRepository playbackRepo,
     required SavePlaybackStateUseCase savePlaybackState,
   })  : _target = target,
-        _playbackRepo = playbackRepo,
         _saveState = savePlaybackState;
 
   final PersistentTarget _target;
-  final PlaybackRepository _playbackRepo;
   final SavePlaybackStateUseCase _saveState;
 
-  /// 旧 `StopPlaybackUseCase._runStopSequence` step 3（位置保存）の逐語移設。
+  /// 旧 `StopPlaybackUseCase._runStopSequence` step 3（位置保存）。
+  /// 進捗率は停止位置と現在の本文長から [SavePlaybackStateUseCase.executeStop] が
+  /// 計算する（旧実装の「保存済み進捗率からの総文字数の逆算」は廃止）。
   /// 例外は投げず、結果を [PositionSaveResult] で返す（B-01 の独立性を維持）。
   @override
   Future<PositionSaveResult> persistStopPosition(
       {required int position}) async {
-    final contentId = _target.contentId;
     try {
-      final existing = await _playbackRepo.getByContentId(contentId) ??
-          PlaybackState(contentId: contentId);
-      final totalChars = existing.progressPct > 0
-          ? (position / (existing.progressPct / 100)).round()
-          : 1;
-      final progressPct = (position / totalChars * 100).clamp(0.0, 100.0);
-      await _saveState.execute(
-        contentId: contentId,
+      await _saveState.executeStop(
+        contentId: _target.contentId,
         position: position,
-        progressPct: progressPct,
       );
       return const PositionSaveResult(succeeded: true);
     } catch (e) {

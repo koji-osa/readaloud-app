@@ -157,6 +157,90 @@ void main() {
     });
   });
 
+  // RA-PROG-IMPL-A-01 T8: 停止位置を保存する5経路（stop / pause / teardown /
+  // retire / adopt）は、同じ「位置 ÷ 現在の本文長」の進捗率へ到達する。
+  group('T8: 5つの停止保存経路が同じ正しい進捗率を保存する', () {
+    // 本文1000文字・既存0%・停止位置70 → 7%。旧実装は100%/completedを保存した。
+    Future<_Env> startedEnv({String sessionId = 'S'}) async {
+      final env = _Env.shared();
+      env.contentRepo.store['c1'] =
+          Content(id: 'c1', title: 't', body: 'x' * 1000, sourceType: 'text');
+      await env.gate.start(sessionId: sessionId, contentId: 'c1');
+      env.handlerPosition = 70;
+      return env;
+    }
+
+    void expectSevenPercent(_Env env) {
+      expect(env.playbackRepo.store['c1']!.position, 70);
+      expect(env.playbackRepo.store['c1']!.progressPct, closeTo(7.0, 1e-9));
+      expect(env.contentRepo.store['c1']!.status, 'in_progress',
+          reason: '開始時のin_progressのまま。誤ってcompletedにしない');
+    }
+
+    test('stop', () async {
+      final env = await startedEnv();
+      final outcome = await env.gate
+          .stopForSession(sessionId: 'S', contentId: 'c1', position: 70);
+      expect(outcome.positionSaveSucceeded, isTrue);
+      expectSevenPercent(env);
+    });
+
+    test('pause', () async {
+      final env = await startedEnv();
+      final outcome =
+          await env.gate.pause(sessionId: 'S', contentId: 'c1', position: 70);
+      expect(outcome.positionSaveSucceeded, isTrue);
+      expectSevenPercent(env);
+    });
+
+    test('teardown（tracker.prepareForRemoval）', () async {
+      final env = _Env.shared();
+      env.contentRepo.store['c1'] =
+          Content(id: 'c1', title: 't', body: 'x' * 1000, sourceType: 'text');
+      final tracker = NormalPlayerSessionTracker(playbackGate: env.gate);
+      final session = NormalPlayerSession(contentId: 'c1');
+      tracker.register(
+          session: session,
+          route: MaterialPageRoute<void>(builder: (_) => const SizedBox()));
+      await env.gate.start(sessionId: session.id, contentId: 'c1');
+      env.handlerPosition = 70;
+
+      final ticket = await tracker.prepareForRemoval(flowId: 'f1');
+
+      expect(ticket.stopOutcome.positionSaveSucceeded, isTrue);
+      expectSevenPercent(env);
+    });
+
+    test('retire（external entry）', () async {
+      final env = await startedEnv();
+      final outcome = await env.gate.retireActiveForExternalEntry(
+          reason: TeardownReason.shareTeardown);
+      expect(outcome.positionSaveSucceeded, isTrue);
+      expectSevenPercent(env);
+    });
+
+    test('adopt（再生中でないlive sessionの再所有）', () async {
+      final env = await startedEnv(sessionId: 'S1');
+      final live =
+          await env.gate.adoptLiveSession(sessionId: 'S2', contentId: 'c1');
+      expect(live, isNotNull);
+      expectSevenPercent(env);
+    });
+
+    test('T9: stale ownerのstopはDBに一切書かない', () async {
+      final env = await startedEnv(sessionId: 'A');
+      env.playbackRepo.store['c1'] =
+          PlaybackState(contentId: 'c1', position: 5, progressPct: 0.5);
+
+      final outcome = await env.gate
+          .stopForSession(sessionId: 'B', contentId: 'c1', position: 70);
+
+      expect(outcome.applicable, isFalse);
+      expect(env.playbackRepo.store['c1']!.position, 5);
+      expect(env.playbackRepo.store['c1']!.progressPct, 0.5);
+    });
+  });
+
   test(
       'start失敗（speak throw）はPlaybackStartFailureとして伝わり、'
       '次のstartはクリーンに成功する（C2 / AC-19）', () async {
