@@ -358,7 +358,48 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
         _resolver = resolver,
         _playbackRepo = playbackRepo,
         _savePlaybackState = savePlaybackState,
-        _accounting = accounting;
+        _accounting = accounting {
+    _completionSubscription =
+        _transport.acceptedPositions.listen(_onAcceptedPosition);
+  }
+
+  StreamSubscription<OwnedPositionEvent>? _completionSubscription;
+
+  /// P5: Normal Player owner の自然終了だけを拾う。Transport の broadcast は
+  /// sync なので、listener 内では epoch の同期 capture のみ行い、状態変更と
+  /// 永続化は microtask 以降の exclusive 区間で行う（§8.2.6）。
+  void _onAcceptedPosition(OwnedPositionEvent e) {
+    if (!e.isNaturalCompletion) return;
+    final owner = e.owner;
+    if (!owner.toString().startsWith('np:')) return;
+    final epoch = _transport.activeSnapshot?.epoch;
+    if (epoch == null) return;
+    scheduleMicrotask(() {
+      unawaited(_completeNaturally(owner, epoch));
+    });
+  }
+
+  Future<void> _completeNaturally(PlaybackOwnerKey owner, int epoch) async {
+    try {
+      await _transport.exclusive((ops) async {
+        final r =
+            await ops.completeNaturallyUnlocked(owner: owner, epoch: epoch);
+        final target = r?.target;
+        if (target is PersistentTarget) {
+          await PersistentPersistencePolicy(
+            target: target,
+            playbackRepo: _playbackRepo,
+            savePlaybackState: _savePlaybackState,
+          ).persistNaturalCompletion();
+        }
+      });
+    } catch (e) {
+      unawaited(DebugLogger.instance.logEvent('error', {
+        'context': 'playback_natural_completion',
+        'errorType': e.runtimeType.toString(),
+      }));
+    }
+  }
 
   final SharedPlaybackTransport _transport;
   final PersistentPlaybackResolver _resolver;
@@ -592,9 +633,13 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
             ));
   }
 
-  // Transport は app-shared provider の所有物。gate からは破棄しない。
+  // Transport は app-shared provider の所有物。gate からは破棄しない
+  // （自然終了の購読のみ解除する）。
   @override
-  void dispose() {}
+  void dispose() {
+    unawaited(_completionSubscription?.cancel());
+    _completionSubscription = null;
+  }
 }
 
 /// Normal Player の session 権威モデル（Canonical Design v0.4.1）。

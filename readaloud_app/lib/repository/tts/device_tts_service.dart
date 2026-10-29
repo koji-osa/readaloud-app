@@ -87,10 +87,16 @@ class TtsAudioHandler extends BaseAudioHandler
             _positionTimer?.cancel();
             _isStopped = true;
             _lastStoppedPosition = 0;
+            // P5: 読み上げ終端位置（最後のチャンク末尾）を確定して自然終了を通知。
+            if (_chunks.isNotEmpty) {
+              final last = _chunks.last;
+              _currentPosition = last.startPosition + last.text.length;
+            }
             customState.add(TtsPlaybackPosition(
               charPosition: _currentPosition,
               isPlaying: false,
               ttsStatus: TtsStatus.stopped,
+              isNaturalCompletion: true,
             ));
             playbackState.add(playbackState.value.copyWith(
               playing: false,
