@@ -50,6 +50,12 @@ class PersistentCheckpointScheduler {
     _windowStart = _now();
   }
 
+  /// checkpoint 保存に失敗した。last position は据え置き、window だけを
+  /// 進めて 1 interval の間は再試行しない（保存失敗中の IO storm 防止）。
+  void markFailed() {
+    _windowStart = _now();
+  }
+
   /// 成否に関わらず必ず呼ぶ（in-flight 解除）。
   void markFinished() => _inFlight = false;
 }

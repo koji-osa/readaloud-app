@@ -187,20 +187,31 @@ void main() {
     expect(env.playbackRepo.saveCount, 0);
   });
 
-  test('保存が例外でも未処理例外は出ず、in-flightは解除され次で再試行できる', () async {
+  test('保存失敗後は1 interval待つ(IO stormなし)。経過後に再試行して成功する', () async {
     final env = await started();
     env.playbackRepo.failSave = true;
     env.clock = env.clock.add(const Duration(seconds: 30));
     env.emit(450);
     await _pump();
+    expect(env.playbackRepo.saveAttempts, 1);
     expect(env.playbackRepo.saveCount, 0);
 
+    // 失敗から30秒未満は、playing eventが来ても再試行しない。
+    for (var i = 1; i <= 5; i++) {
+      env.clock = env.clock.add(const Duration(seconds: 5));
+      env.emit(450 + 10 * i);
+      await _pump();
+    }
+    expect(env.playbackRepo.saveAttempts, 1, reason: '失敗直後のbackoff');
+
+    // interval経過 + 位置前進 + repo復旧 → 再試行して成功。
     env.playbackRepo.failSave = false;
-    env.clock = env.clock.add(const Duration(seconds: 1));
-    env.emit(460);
+    env.clock = env.clock.add(const Duration(seconds: 5)); // 失敗から30秒
+    env.emit(600);
     await _pump();
+    expect(env.playbackRepo.saveAttempts, 2);
     expect(env.playbackRepo.saveCount, 1);
-    expect(env.playbackRepo.store['c1']!.position, 460);
+    expect(env.playbackRepo.store['c1']!.position, 600);
   });
 
   test('gate dispose時にopが保留中でも例外なく、書込みもしない', () async {
@@ -316,6 +327,7 @@ class _FakePlaybackRepository implements PlaybackRepository {
   final Map<String, PlaybackState> store = {};
   int saveCount = 0;
   bool failSave = false;
+  int saveAttempts = 0;
 
   @override
   Future<PlaybackState?> getByContentId(String contentId) async =>
@@ -323,6 +335,7 @@ class _FakePlaybackRepository implements PlaybackRepository {
 
   @override
   Future<void> save(PlaybackState state) async {
+    saveAttempts++;
     if (failSave) throw StateError('save failed');
     saveCount++;
     store[state.contentId] = state;

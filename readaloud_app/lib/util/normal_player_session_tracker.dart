@@ -435,6 +435,7 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
         if (saved.succeeded) {
           _checkpoint.markSucceeded(position: snap.position);
         } else {
+          _checkpoint.markFailed();
           unawaited(DebugLogger.instance.logEvent('error', {
             'context': 'playback_checkpoint',
             'errorType': saved.errorType,
@@ -442,6 +443,7 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
         }
       });
     } catch (e) {
+      _checkpoint.markFailed();
       unawaited(DebugLogger.instance.logEvent('error', {
         'context': 'playback_checkpoint',
         'errorType': e.runtimeType.toString(),
