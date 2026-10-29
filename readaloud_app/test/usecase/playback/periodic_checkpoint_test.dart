@@ -213,6 +213,38 @@ void main() {
     expect(env.playbackRepo.store['c1']!.position, 600);
   });
 
+  test('W2-R-09: checkpoint予約後のstop(seq進行)+遅れたisPlaying:trueでstop保存が上書きされない',
+      () async {
+    final env = await started();
+    env.clock = env.clock.add(const Duration(seconds: 30));
+    env.emit(450); // checkpoint 予約
+    await env.gate
+        .stopForSession(sessionId: 'S', contentId: 'c1', position: 333);
+    final saves = env.playbackRepo.saveCount;
+    expect(env.playbackRepo.store['c1']!.position, 333);
+
+    env.emit(460); // 同一epochの遅れたisPlaying:true
+    await _pump();
+
+    expect(env.playbackRepo.store['c1']!.position, 333,
+        reason: 'stop保存が最終(予約済みcheckpointはseq不一致で破棄)');
+    expect(env.playbackRepo.saveCount, saves);
+  });
+
+  test('W2-R-09: checkpoint予約後・op実行前にisPlaying:falseが届くとsnap.isPlayingガードで保存しない',
+      () async {
+    final env = await started();
+    final base = env.playbackRepo.saveCount;
+    env.clock = env.clock.add(const Duration(seconds: 30));
+    env.emit(450); // checkpoint 予約（microtask）
+    env.positions.add(const TtsPlaybackPosition(
+        charPosition: 450, isPlaying: false, ttsStatus: TtsStatus.paused));
+    await _pump();
+
+    expect(env.playbackRepo.saveCount, base);
+    expect(env.playbackRepo.store.containsKey('c1'), isFalse);
+  });
+
   test('gate dispose時にopが保留中でも例外なく、書込みもしない', () async {
     final env = await started();
     env.clock = env.clock.add(const Duration(seconds: 30));

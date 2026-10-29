@@ -163,6 +163,64 @@ void main() {
     expect(env.transport.activeOwner, isNull);
   });
 
+  test('W2-R-02: 自然終了でresume fence(clearIfNoLiveOwner)が1回張られる', () async {
+    final env = await started();
+    env.positions.add(_completed1000);
+    await _pump();
+
+    expect(env.fence.calls, [NotificationDisposition.clearIfNoLiveOwner]);
+    expect(env.transport.activeOwner, isNull);
+  });
+
+  test('W2-R-02: fenceが例外でもownerはclearされ、100%/completedは保存される', () async {
+    final env = await started();
+    env.fence.failDiscard = true;
+    env.positions.add(_completed1000);
+    await _pump();
+
+    expect(env.fence.calls, hasLength(1));
+    expect(env.transport.activeOwner, isNull);
+    expect(env.playbackRepo.store['c1']!.progressPct, 100.0);
+    expect(env.contentRepo.store['c1']!.status, 'completed');
+  });
+
+  test('W2-R-04(a): stop保留中に完了eventが届いても、最終DBはstopの結果でownerは残る', () async {
+    final env = await started();
+    env.playbackRepo.holdSave = Completer<void>();
+    final stop = env.gate
+        .stopForSession(sessionId: 'S', contentId: 'c1', position: 100);
+    await _pump(); // stopはsaveで保留中
+
+    env.positions.add(_completed1000);
+    await _pump();
+    env.playbackRepo.holdSave!.complete();
+    await stop;
+    await _pump();
+
+    final s = env.playbackRepo.store['c1']!;
+    expect(s.position, 100, reason: 'user stopの結果が最終');
+    expect(s.progressPct, 10.0);
+    expect(env.contentRepo.store['c1']!.status, isNot('completed'));
+    expect(env.transport.activeOwner, PlaybackOwnerKey.normalPlayer('S'),
+        reason: '破棄された完了はownerを変えない');
+  });
+
+  test('W2-R-04(b): 完了受理後・op実行前にstopForSessionが呼ばれると完了は破棄される', () async {
+    final env = await started();
+
+    env.positions.add(_completed1000); // opはmicrotask予約のみ
+    final stop = env.gate
+        .stopForSession(sessionId: 'S', contentId: 'c1', position: 100);
+    await stop;
+    await _pump();
+
+    final s = env.playbackRepo.store['c1']!;
+    expect(s.position, 100);
+    expect(s.progressPct, 10.0);
+    expect(env.contentRepo.store['c1']!.status, isNot('completed'));
+    expect(env.transport.activeOwner, PlaybackOwnerKey.normalPlayer('S'));
+  });
+
   test('保存が例外でも未処理例外は漏れず、ownerはclearされる', () async {
     final env = await started();
     env.playbackRepo.failSave = true;
@@ -180,7 +238,7 @@ class _Env {
       tts: tts,
       positionStream: positions.stream,
       currentPosition: () => handlerPosition,
-      resumeFence: _FakeFence(),
+      resumeFence: fence,
     );
     gate = NormalPlayerPlaybackGate.shared(
       transport: transport,
@@ -200,6 +258,7 @@ class _Env {
   final playbackRepo = _FakePlaybackRepository();
   final settingsRepo = _FakeSettingsRepository();
   final tts = _FakeTts();
+  final fence = _FakeFence();
   final positions = StreamController<dynamic>.broadcast(sync: true);
   int handlerPosition = 0;
   late final SharedPlaybackTransport transport;
@@ -234,10 +293,16 @@ class _FakeTts implements TtsService {
 }
 
 class _FakeFence implements PlaybackResumeFence {
+  final List<NotificationDisposition> calls = [];
+  bool failDiscard = false;
+
   @override
   Future<void> discardResumeState({
     required NotificationDisposition notificationDisposition,
-  }) async {}
+  }) async {
+    calls.add(notificationDisposition);
+    if (failDiscard) throw StateError('fence failed');
+  }
 }
 
 class _FakeContentRepository implements ContentRepository {
@@ -266,6 +331,7 @@ class _FakePlaybackRepository implements PlaybackRepository {
   final Map<String, PlaybackState> store = {};
   int saveCount = 0;
   bool failSave = false;
+  Completer<void>? holdSave;
 
   @override
   Future<PlaybackState?> getByContentId(String contentId) async =>
@@ -273,6 +339,8 @@ class _FakePlaybackRepository implements PlaybackRepository {
 
   @override
   Future<void> save(PlaybackState state) async {
+    final hold = holdSave;
+    if (hold != null) await hold.future;
     if (failSave) throw StateError('save failed');
     saveCount++;
     store[state.contentId] = state;

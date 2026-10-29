@@ -355,20 +355,25 @@ void main() {
 
   // ---------------------------------------------------------------- IT-10
   group('IT-10 fail-closed', () {
-    testWidgets('完了保存が例外: 例外が漏れず、100%/completedにならず、back可能', (tester) async {
+    testWidgets('完了保存が例外: 例外が漏れず、DB/statusは完了前のまま、ownerはclear、back可能',
+        (tester) async {
       final clock = _Clock();
       final env = await _openPlaying(tester, clock);
+      final before = env.playbackRepo.store['e1'];
+      final beforePos = before?.position;
+      final beforePct = before?.progressPct;
+      final beforeStatus = (await env.contentRepo.getById('e1'))!.status;
       env.playbackRepo.failSave = true;
       env.emit(_completion1000);
       await _flush(tester);
 
       expect(tester.takeException(), isNull);
-      // (play開始等で既存の保存が1件あり得るため、「未保存」ではなく
-      // 「100%/本文長が書かれていない」を判定する。)
-      expect(env.playbackRepo.store['e1']?.progressPct ?? 0.0, lessThan(100.0),
-          reason: '100%を書いていない');
-      expect(env.playbackRepo.store['e1']?.position ?? 0, lessThan(1000));
-      expect((await env.contentRepo.getById('e1'))!.status, isNot('completed'));
+      final after = env.playbackRepo.store['e1'];
+      expect(after?.position, beforePos, reason: '完了前snapshotと同一(position)');
+      expect(after?.progressPct, beforePct, reason: '完了前snapshotと同一(pct)');
+      expect((await env.contentRepo.getById('e1'))!.status, beforeStatus,
+          reason: 'status不変');
+      expect(env.transport.activeOwner, isNull, reason: 'ownerはclear');
 
       env.playbackRepo.failSave = false;
       await tester.tap(find.byIcon(Icons.arrow_back));
@@ -448,7 +453,7 @@ void main() {
       expect(await core.usedChars(), '1000', reason: 'usage二重flushなし');
     });
 
-    test('gate dispose時に完了op/checkpoint opが保留中: 例外なし・書込みは高々1回', () async {
+    test('gate dispose時に完了op/checkpoint opが保留中: 例外なし・書込み0', () async {
       for (final kind in ['completion', 'checkpoint']) {
         final clock = _Clock();
         final core = ItCore(gateBuilder: _gateWith(clock));
@@ -467,18 +472,8 @@ void main() {
         core.gate.dispose();
         await settle();
 
-        // 計画のoracleは「クラッシュしない」。dispose時点で既に受理済みのeventの
-        // 保留opが実行されるかは観測値として記録する(仕様上はsubscription cancelのみ)。
-        final delta = core.playbackRepo.saveCalls - saves;
-        // ignore: avoid_print
-        print('IT10_DISPOSE_OBSERVED kind=$kind writesAfterDispose=$delta '
-            'stored=${core.playbackRepo.store['c1']?.position}/'
-            '${core.playbackRepo.store['c1']?.progressPct}');
-        expect(delta, lessThanOrEqualTo(1), reason: '$kind: 高々1回(重複・暴走なし)');
-        if (delta == 1 && kind == 'completion') {
-          expect(core.playbackRepo.store['c1']!.progressPct, 100.0);
-          expect(core.playbackRepo.store['c1']!.position, 1000);
-        }
+        expect(core.playbackRepo.saveCalls - saves, 0,
+            reason: '$kind: dispose後に保留opは書込みしない');
         core.transport.dispose();
         await core.positions.close();
       }

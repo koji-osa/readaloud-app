@@ -378,7 +378,26 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
   /// 増やす。予約済み checkpoint が、後から来た操作より古い位置で保存し直す
   /// のを防ぐ。
   int _controlSeq = 0;
+
+  /// 処理中（Future 未完了）の user control op の数。自然終了 event の受理時に
+  /// これが 0 でなければ、ユーザー操作を優先して完了を破棄する（W2-R-04）。
+  int _pendingControlOps = 0;
   bool _disposed = false;
+
+  /// control op を開始する（同期）。[_controlSeq] を進め、[run] の Future が
+  /// 完了するまで [_pendingControlOps] を保つ。戻り値・例外は変えない。
+  Future<T> _control<T>(Future<T> Function() run) {
+    _controlSeq++;
+    _pendingControlOps++;
+    final Future<T> f;
+    try {
+      f = run();
+    } catch (_) {
+      _pendingControlOps--;
+      rethrow;
+    }
+    return f.whenComplete(() => _pendingControlOps--);
+  }
 
   static bool _isNormalPlayerOwner(PlaybackOwnerKey owner) =>
       owner.toString().startsWith('np:');
@@ -397,9 +416,25 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
       if (e.isPlaying) _maybeCheckpoint(owner, epoch, e.charPosition);
       return;
     }
+    if (_pendingControlOps > 0) {
+      // user control op が処理中: ユーザー操作の結果を優先し、完了は破棄する。
+      _logCompletionDropped(owner, epoch, 'control_pending');
+      return;
+    }
+    final seq = _controlSeq;
     scheduleMicrotask(() {
-      unawaited(_completeNaturally(owner, epoch));
+      unawaited(_completeNaturally(owner, epoch, seq));
     });
+  }
+
+  void _logCompletionDropped(
+      PlaybackOwnerKey owner, int epoch, String reason) {
+    unawaited(
+        DebugLogger.instance.logEvent('playback_natural_completion_dropped', {
+      'owner': owner.toString(),
+      'epoch': epoch,
+      'reason': reason,
+    }));
   }
 
   /// P6: 約30秒ごとの checkpoint。sync broadcast の callback 内では判定と
@@ -453,9 +488,16 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     }
   }
 
-  Future<void> _completeNaturally(PlaybackOwnerKey owner, int epoch) async {
+  Future<void> _completeNaturally(
+      PlaybackOwnerKey owner, int epoch, int seq) async {
     try {
       await _transport.exclusive((ops) async {
+        if (_disposed) return;
+        if (_controlSeq != seq) {
+          // 受理後に user control op が始まった: ユーザー操作を優先。
+          _logCompletionDropped(owner, epoch, 'control_after_accept');
+          return;
+        }
         final r =
             await ops.completeNaturallyUnlocked(owner: owner, epoch: epoch);
         final target = r?.target;
@@ -490,17 +532,16 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
 
   @override
   Future<void> start({required String sessionId, required String contentId}) {
-    _controlSeq++;
     // 解決（DB 読込・status 更新）も NP/Transient 共通 chain 上で行う。
-    return _transport.exclusive((ops) async {
-      final request = await _resolver.resolveForStart(contentId);
-      await ops.startUnlocked(
-        PlaybackOwnerKey.normalPlayer(sessionId),
-        request,
-        accounting: _accounting,
-        logFields: {'origin': 'player', 'contentId': contentId},
-      );
-    });
+    return _control(() => _transport.exclusive((ops) async {
+          final request = await _resolver.resolveForStart(contentId);
+          await ops.startUnlocked(
+            PlaybackOwnerKey.normalPlayer(sessionId),
+            request,
+            accounting: _accounting,
+            logFields: {'origin': 'player', 'contentId': contentId},
+          );
+        }));
   }
 
   @override
@@ -509,12 +550,11 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     required String contentId,
     required int position,
   }) {
-    _controlSeq++;
-    return _transport.exclusive((ops) async => _toStopOutcome(
+    return _control(() => _transport.exclusive((ops) async => _toStopOutcome(
           await ops.pauseUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
           contentId: contentId,
           position: position,
-        ));
+        )));
   }
 
   @override
@@ -523,12 +563,11 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     required String contentId,
     int? position,
   }) {
-    _controlSeq++;
-    return _transport.exclusive((ops) async => _toStopOutcome(
+    return _control(() => _transport.exclusive((ops) async => _toStopOutcome(
           await ops.stopUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
           contentId: contentId,
           position: position,
-        ));
+        )));
   }
 
   Future<PlaybackStopOutcome> _toStopOutcome(
@@ -561,8 +600,7 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     required String contentId,
     required TeardownReason reason,
   }) {
-    _controlSeq++;
-    return _transport.exclusive((ops) async {
+    return _control(() => _transport.exclusive((ops) async {
       final outcome = await ops.forceStopForTeardownUnlocked(
         expectedOwner: PlaybackOwnerKey.normalPlayer(sessionId),
         reason: reason,
@@ -591,15 +629,14 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
             positionSaveErrorType: saved.errorType,
           );
       }
-    });
+    }));
   }
 
   @override
   Future<PlaybackStopOutcome> retireActiveForExternalEntry({
     required TeardownReason reason,
   }) {
-    _controlSeq++;
-    return _transport.exclusive((ops) async {
+    return _control(() => _transport.exclusive((ops) async {
       final retirement =
           await ops.retireActiveForExternalEntryUnlocked(reason: reason);
       if (!retirement.hadActivePlayback) {
@@ -623,7 +660,7 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
         usageFlushErrorType: stop.usageFlushErrorType,
         positionSaveErrorType: saved.errorType,
       );
-    });
+    }));
   }
 
   PlaybackOwnerKey _ownerOf(String sessionId) =>
@@ -651,8 +688,14 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
   Future<PersistentLiveSession?> adoptLiveSession({
     required String sessionId,
     required String contentId,
+  }) =>
+      _control(
+          () => _adoptLiveSession(sessionId: sessionId, contentId: contentId));
+
+  Future<PersistentLiveSession?> _adoptLiveSession({
+    required String sessionId,
+    required String contentId,
   }) async {
-    _controlSeq++;
     final snapshot = await _transport.adoptActivePersistent(
       target: PersistentTarget.ofRegisteredSessionContentId(contentId),
       newOwner: _ownerOf(sessionId),
