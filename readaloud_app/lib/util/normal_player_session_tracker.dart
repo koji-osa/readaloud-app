@@ -6,6 +6,7 @@ import '../model/normal_player_session.dart';
 import '../model/playback_request.dart';
 import '../repository/playback_repository.dart';
 import '../repository/tts/tts_service.dart' show TtsStatus;
+import '../usecase/playback/persistent_checkpoint_policy.dart';
 import '../usecase/playback/persistent_playback_resolver.dart';
 import '../usecase/playback/playback_persistence_policy.dart';
 import '../usecase/playback/playback_usage_accounting.dart';
@@ -140,7 +141,11 @@ class NormalPlayerPlaybackGate {
     required PlaybackRepository playbackRepo,
     required SavePlaybackStateUseCase savePlaybackState,
     required PlaybackUsageAccounting accounting,
+    Duration checkpointInterval = const Duration(seconds: 30),
+    DateTime Function()? clock,
   }) : _backend = _SharedTransportPlaybackBackend(
+          checkpointInterval: checkpointInterval,
+          clock: clock,
           transport: transport,
           resolver: resolver,
           playbackRepo: playbackRepo,
@@ -354,14 +359,29 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     required PlaybackRepository playbackRepo,
     required SavePlaybackStateUseCase savePlaybackState,
     required PlaybackUsageAccounting accounting,
+    Duration checkpointInterval = const Duration(seconds: 30),
+    DateTime Function()? clock,
   })  : _transport = transport,
         _resolver = resolver,
         _playbackRepo = playbackRepo,
         _savePlaybackState = savePlaybackState,
-        _accounting = accounting {
+        _accounting = accounting,
+        _checkpoint = PersistentCheckpointScheduler(
+            interval: checkpointInterval, now: clock) {
     _completionSubscription =
         _transport.acceptedPositions.listen(_onAcceptedPosition);
   }
+
+  final PersistentCheckpointScheduler _checkpoint;
+
+  /// P6: start / pause / stop / teardown / retire / adopt の開始時に同期的に
+  /// 増やす。予約済み checkpoint が、後から来た操作より古い位置で保存し直す
+  /// のを防ぐ。
+  int _controlSeq = 0;
+  bool _disposed = false;
+
+  static bool _isNormalPlayerOwner(PlaybackOwnerKey owner) =>
+      owner.toString().startsWith('np:');
 
   StreamSubscription<OwnedPositionEvent>? _completionSubscription;
 
@@ -369,14 +389,66 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
   /// sync なので、listener 内では epoch の同期 capture のみ行い、状態変更と
   /// 永続化は microtask 以降の exclusive 区間で行う（§8.2.6）。
   void _onAcceptedPosition(OwnedPositionEvent e) {
-    if (!e.isNaturalCompletion) return;
     final owner = e.owner;
-    if (!owner.toString().startsWith('np:')) return;
+    if (!_isNormalPlayerOwner(owner)) return;
     final epoch = _transport.activeSnapshot?.epoch;
     if (epoch == null) return;
+    if (!e.isNaturalCompletion) {
+      if (e.isPlaying) _maybeCheckpoint(owner, epoch, e.charPosition);
+      return;
+    }
     scheduleMicrotask(() {
       unawaited(_completeNaturally(owner, epoch));
     });
+  }
+
+  /// P6: 約30秒ごとの checkpoint。sync broadcast の callback 内では判定と
+  /// microtask 予約のみ行い、再検証と保存は exclusive 区間で行う。
+  void _maybeCheckpoint(PlaybackOwnerKey owner, int epoch, int position) {
+    if (!_checkpoint.onPlaying(
+        owner: owner, epoch: epoch, position: position)) {
+      return;
+    }
+    final seq = _controlSeq;
+    scheduleMicrotask(() {
+      unawaited(_runCheckpoint(owner, epoch, seq));
+    });
+  }
+
+  Future<void> _runCheckpoint(
+      PlaybackOwnerKey owner, int epoch, int seq) async {
+    try {
+      if (_disposed) return;
+      await _transport.exclusive((ops) async {
+        if (_disposed || _controlSeq != seq) return;
+        final snap = ops.activeSnapshot;
+        if (ops.activeOwner != owner ||
+            snap == null ||
+            snap.epoch != epoch ||
+            !snap.isPlaying) {
+          return;
+        }
+        final target = snap.target;
+        if (target is! PersistentTarget) return;
+        final saved = await _policyFor(target.contentId)
+            .persistStopPosition(position: snap.position);
+        if (saved.succeeded) {
+          _checkpoint.markSucceeded(position: snap.position);
+        } else {
+          unawaited(DebugLogger.instance.logEvent('error', {
+            'context': 'playback_checkpoint',
+            'errorType': saved.errorType,
+          }));
+        }
+      });
+    } catch (e) {
+      unawaited(DebugLogger.instance.logEvent('error', {
+        'context': 'playback_checkpoint',
+        'errorType': e.runtimeType.toString(),
+      }));
+    } finally {
+      _checkpoint.markFinished();
+    }
   }
 
   Future<void> _completeNaturally(PlaybackOwnerKey owner, int epoch) async {
@@ -416,6 +488,7 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
 
   @override
   Future<void> start({required String sessionId, required String contentId}) {
+    _controlSeq++;
     // 解決（DB 読込・status 更新）も NP/Transient 共通 chain 上で行う。
     return _transport.exclusive((ops) async {
       final request = await _resolver.resolveForStart(contentId);
@@ -433,24 +506,28 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     required String sessionId,
     required String contentId,
     required int position,
-  }) =>
-      _transport.exclusive((ops) async => _toStopOutcome(
-            await ops.pauseUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
-            contentId: contentId,
-            position: position,
-          ));
+  }) {
+    _controlSeq++;
+    return _transport.exclusive((ops) async => _toStopOutcome(
+          await ops.pauseUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
+          contentId: contentId,
+          position: position,
+        ));
+  }
 
   @override
   Future<PlaybackStopOutcome> stopForSession({
     required String sessionId,
     required String contentId,
     int? position,
-  }) =>
-      _transport.exclusive((ops) async => _toStopOutcome(
-            await ops.stopUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
-            contentId: contentId,
-            position: position,
-          ));
+  }) {
+    _controlSeq++;
+    return _transport.exclusive((ops) async => _toStopOutcome(
+          await ops.stopUnlocked(PlaybackOwnerKey.normalPlayer(sessionId)),
+          contentId: contentId,
+          position: position,
+        ));
+  }
 
   Future<PlaybackStopOutcome> _toStopOutcome(
     OwnedCommandResult result, {
@@ -481,67 +558,71 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     required String sessionId,
     required String contentId,
     required TeardownReason reason,
-  }) =>
-      _transport.exclusive((ops) async {
-        final outcome = await ops.forceStopForTeardownUnlocked(
-          expectedOwner: PlaybackOwnerKey.normalPlayer(sessionId),
-          reason: reason,
-          notificationDisposition: NotificationDisposition.handoff,
-        );
-        switch (outcome.application) {
-          case TeardownApplication.noActivePlayback:
-            return PlaybackStopOutcome.notApplicable();
-          case TeardownApplication.ignoredStaleOwner:
-            // D8/D16: ttsStopConfirmed == false となり route 除去は進まない。
-            return PlaybackStopOutcome(
-              ttsStopSucceeded: false,
-              usageFlushSucceeded: true,
-              positionSaveSucceeded: true,
-              ttsStopErrorType: outcome.ttsStopErrorType,
-            );
-          case TeardownApplication.applied:
-            final saved = await _policyFor(contentId)
-                .persistStopPosition(position: outcome.positionAtStop);
-            return PlaybackStopOutcome(
-              ttsStopSucceeded: outcome.ttsStopSucceeded,
-              usageFlushSucceeded: outcome.usageFlushSucceeded,
-              positionSaveSucceeded: saved.succeeded,
-              ttsStopErrorType: outcome.ttsStopErrorType,
-              usageFlushErrorType: outcome.usageFlushErrorType,
-              positionSaveErrorType: saved.errorType,
-            );
-        }
-      });
+  }) {
+    _controlSeq++;
+    return _transport.exclusive((ops) async {
+      final outcome = await ops.forceStopForTeardownUnlocked(
+        expectedOwner: PlaybackOwnerKey.normalPlayer(sessionId),
+        reason: reason,
+        notificationDisposition: NotificationDisposition.handoff,
+      );
+      switch (outcome.application) {
+        case TeardownApplication.noActivePlayback:
+          return PlaybackStopOutcome.notApplicable();
+        case TeardownApplication.ignoredStaleOwner:
+          // D8/D16: ttsStopConfirmed == false となり route 除去は進まない。
+          return PlaybackStopOutcome(
+            ttsStopSucceeded: false,
+            usageFlushSucceeded: true,
+            positionSaveSucceeded: true,
+            ttsStopErrorType: outcome.ttsStopErrorType,
+          );
+        case TeardownApplication.applied:
+          final saved = await _policyFor(contentId)
+              .persistStopPosition(position: outcome.positionAtStop);
+          return PlaybackStopOutcome(
+            ttsStopSucceeded: outcome.ttsStopSucceeded,
+            usageFlushSucceeded: outcome.usageFlushSucceeded,
+            positionSaveSucceeded: saved.succeeded,
+            ttsStopErrorType: outcome.ttsStopErrorType,
+            usageFlushErrorType: outcome.usageFlushErrorType,
+            positionSaveErrorType: saved.errorType,
+          );
+      }
+    });
+  }
 
   @override
   Future<PlaybackStopOutcome> retireActiveForExternalEntry({
     required TeardownReason reason,
-  }) =>
-      _transport.exclusive((ops) async {
-        final retirement =
-            await ops.retireActiveForExternalEntryUnlocked(reason: reason);
-        if (!retirement.hadActivePlayback) {
-          return PlaybackStopOutcome.notApplicable();
-        }
-        final stop = retirement.stopOutcome;
-        // Persistent なら retire した target 自身へ保存（AC-22）。Transient は非該当。
-        final PositionSaveResult saved = switch (retirement.retiredTarget) {
-          PersistentTarget target => await PersistentPersistencePolicy(
-              target: target,
-              playbackRepo: _playbackRepo,
-              savePlaybackState: _savePlaybackState,
-            ).persistStopPosition(position: stop.positionAtStop),
-          TransientTarget() || null => const PositionSaveResult.notApplicable(),
-        };
-        return PlaybackStopOutcome(
-          ttsStopSucceeded: stop.ttsStopSucceeded,
-          usageFlushSucceeded: stop.usageFlushSucceeded,
-          positionSaveSucceeded: saved.succeeded,
-          ttsStopErrorType: stop.ttsStopErrorType,
-          usageFlushErrorType: stop.usageFlushErrorType,
-          positionSaveErrorType: saved.errorType,
-        );
-      });
+  }) {
+    _controlSeq++;
+    return _transport.exclusive((ops) async {
+      final retirement =
+          await ops.retireActiveForExternalEntryUnlocked(reason: reason);
+      if (!retirement.hadActivePlayback) {
+        return PlaybackStopOutcome.notApplicable();
+      }
+      final stop = retirement.stopOutcome;
+      // Persistent なら retire した target 自身へ保存（AC-22）。Transient は非該当。
+      final PositionSaveResult saved = switch (retirement.retiredTarget) {
+        PersistentTarget target => await PersistentPersistencePolicy(
+            target: target,
+            playbackRepo: _playbackRepo,
+            savePlaybackState: _savePlaybackState,
+          ).persistStopPosition(position: stop.positionAtStop),
+        TransientTarget() || null => const PositionSaveResult.notApplicable(),
+      };
+      return PlaybackStopOutcome(
+        ttsStopSucceeded: stop.ttsStopSucceeded,
+        usageFlushSucceeded: stop.usageFlushSucceeded,
+        positionSaveSucceeded: saved.succeeded,
+        ttsStopErrorType: stop.ttsStopErrorType,
+        usageFlushErrorType: stop.usageFlushErrorType,
+        positionSaveErrorType: saved.errorType,
+      );
+    });
+  }
 
   PlaybackOwnerKey _ownerOf(String sessionId) =>
       PlaybackOwnerKey.normalPlayer(sessionId);
@@ -569,6 +650,7 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
     required String sessionId,
     required String contentId,
   }) async {
+    _controlSeq++;
     final snapshot = await _transport.adoptActivePersistent(
       target: PersistentTarget.ofRegisteredSessionContentId(contentId),
       newOwner: _ownerOf(sessionId),
@@ -637,6 +719,7 @@ class _SharedTransportPlaybackBackend implements _NormalPlayerPlaybackBackend {
   // （自然終了の購読のみ解除する）。
   @override
   void dispose() {
+    _disposed = true;
     unawaited(_completionSubscription?.cancel());
     _completionSubscription = null;
   }
