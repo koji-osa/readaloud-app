@@ -98,7 +98,9 @@ class _AddScreenState extends ConsumerState<AddScreen>
   Future<void> _startReading(Content content) async {
     if (mounted) {
       // 保存完了後・画面遷移前に一覧を更新（FIX-024）
-      ref.read(contentListViewModelProvider.notifier).loadContents();
+      // AddScreenはpushReplacementで破棄されるため、以降のrefは使わず先にnotifierを捕捉する。
+      final contentListVm = ref.read(contentListViewModelProvider.notifier);
+      contentListVm.loadContents();
       // v0.4.1 D4: session を作り、pushReplacement より前に tracker へ register する。
       final session = NormalPlayerSession(contentId: content.id);
       final route = MaterialPageRoute<void>(
@@ -112,7 +114,12 @@ class _AddScreenState extends ConsumerState<AddScreen>
         unawaited(
           Navigator.of(context)
               .pushReplacement(route)
-              .then((_) => tracker.clearIfCurrent(route)),
+              .then((_) {
+            tracker.clearIfCurrent(route);
+            // BUG-P4: Homeの「+」のawaitはpushReplacement時点で完了してしまうため、
+            // Player route完了後にも一覧を更新する（Home _openPlayerと同じ契約）。
+            if (contentListVm.mounted) contentListVm.loadContents();
+          }),
         );
       } catch (e) {
         tracker.abortRegistration(token);
