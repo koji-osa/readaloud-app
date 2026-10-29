@@ -10,7 +10,6 @@ import 'package:readaloud_app/model/tts_playback_position.dart';
 import 'package:readaloud_app/repository/content_repository.dart';
 import 'package:readaloud_app/repository/playback_repository.dart';
 import 'package:readaloud_app/repository/settings_repository.dart';
-import 'package:readaloud_app/repository/tts/playback_resume_fence.dart';
 import 'package:readaloud_app/repository/tts/tts_service.dart';
 import 'package:readaloud_app/usecase/playback/persistent_playback_resolver.dart';
 import 'package:readaloud_app/usecase/playback/playback_usage_accounting.dart';
