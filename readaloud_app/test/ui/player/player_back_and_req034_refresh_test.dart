@@ -155,7 +155,72 @@ void main() {
     expect(env.playbackRepo.saveCalls - savesBefore, 1,
         reason: 'stop保存は1回だけ（2回目のタップは無視）');
   });
+
+  testWidgets(
+      'W2-R-01: AppBar back待機中にSystem Backでrouteが先に閉じても、'
+      '完了後にHomeがpopされない', (tester) async {
+    final env = await openPlayerPlaying(tester);
+    final barrier = Completer<void>();
+    env.playbackRepo.saveBarrier = barrier;
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.binding.handlePopRoute(); // System Back
+    await tester.pump(const Duration(milliseconds: 100));
+
+    barrier.complete();
+    env.playbackRepo.saveBarrier = null;
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(PlayerScreen, skipOffstage: false), findsNothing);
+    expect(find.byType(HomeScreen), findsOneWidget,
+        reason: 'Playerのみが閉じ、Homeは残る');
+  });
+
+  testWidgets('W2-R-05: 離脱待機中は入力を吸収する（再生操作・2回目のbackが無効）',
+      (tester) async {
+    final env = await openPlayerPlaying(tester);
+    final barrier = Completer<void>();
+    env.playbackRepo.saveBarrier = barrier;
+    final savesBefore = env.playbackRepo.saveCalls;
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final absorbing = find.descendant(
+        of: find.byType(PlayerScreen),
+        matching:
+            find.byWidgetPredicate((w) => w is AbsorbPointer && w.absorbing));
+    expect(absorbing, findsWidgets, reason: '待機中はAbsorbPointerがabsorbing');
+
+    final speaksBefore = env.tts.speakCalls;
+    final pausesBefore = env.tts.pauseCalls;
+    final playControl = find.byIcon(Icons.play_arrow).evaluate().isNotEmpty
+        ? find.byIcon(Icons.play_arrow)
+        : find.byIcon(Icons.pause);
+    expect(playControl, findsOneWidget);
+    await tester.tap(playControl, warnIfMissed: false);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.byIcon(Icons.arrow_back), warnIfMissed: false);
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(env.tts.speakCalls, speaksBefore, reason: '再生タップは吸収され新規startなし');
+    expect(env.tts.pauseCalls, pausesBefore, reason: '再生/一時停止タップは吸収');
+    expect(env.playbackRepo.saveCalls - savesBefore, 1,
+        reason: '2回目のbackタップも吸収され、stop保存は1回のまま');
+
+    barrier.complete();
+    env.playbackRepo.saveBarrier = null;
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(env.tts.speakCalls, speaksBefore, reason: '離脱後に再生が始まらない');
+    expect(find.byType(PlayerScreen, skipOffstage: false), findsNothing);
+    expect(find.byType(HomeScreen), findsOneWidget);
+  });
 }
+
 class _TestEnv {
   _TestEnv({
     required this.container,
@@ -164,7 +229,10 @@ class _TestEnv {
     required this.playbackRepo,
     required this.positionController,
     required this.handlerPosition,
+    required this.tts,
   });
+
+  final _FakeTtsService tts;
 
   final ProviderContainer container;
   final NormalPlayerSessionTracker tracker;
@@ -297,6 +365,7 @@ Future<_TestEnv> _pumpHome(
     playbackRepo: playbackRepo,
     positionController: positionController,
     handlerPosition: handlerPosition,
+    tts: ttsService,
   );
 }
 
@@ -318,6 +387,9 @@ class _NoopFence implements PlaybackResumeFence {
 }
 
 class _FakeTtsService implements TtsService {
+  int speakCalls = 0;
+  int pauseCalls = 0;
+
   @override
   Future<void> speak({
     required String text,
@@ -326,10 +398,14 @@ class _FakeTtsService implements TtsService {
     double pitch = 1.0,
     double volume = 1.0,
     String? voiceId,
-  }) async {}
+  }) async {
+    speakCalls++;
+  }
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async {
+    pauseCalls++;
+  }
 
   @override
   Future<void> stop() async {}

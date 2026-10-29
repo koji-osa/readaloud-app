@@ -255,7 +255,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     });
 
     return Scaffold(
-      body: SafeArea(
+      body: AbsorbPointer(
+        // W2-R-05: 離脱(stop待機)中は入力を受けない。
+        absorbing: _leaving,
+        child: SafeArea(
         child: Column(
           children: [
             // ヘッダー
@@ -270,8 +273,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       // P10: stopの保存完了後にpopし、route完了時のreloadが
                       // 保存後のDB値を読むようにする。二重タップは無視する。
                       if (_leaving) return;
-                      _leaving = true;
+                      setState(() => _leaving = true);
                       final navigator = Navigator.of(context);
+                      final route = ModalRoute.of(context);
                       try {
                         await vm
                             .stop(origin: _origin)
@@ -281,8 +285,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       } catch (_) {
                         // stop失敗でも従来どおり戻れるようにする。
                       }
-                      if (!mounted) return;
-                      navigator.pop();
+                      // W2-R-01: System Backで先にこのrouteが閉じ始めていても
+                      // 別route(Home)をpopしない。自routeだけをidentity-safeに閉じる。
+                      if (!mounted || route == null) return;
+                      if (route.isCurrent) {
+                        navigator.pop();
+                      } else if (route.isActive) {
+                        navigator.removeRoute(route);
+                      }
                     },
                   ),
                   Expanded(
@@ -567,6 +577,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
