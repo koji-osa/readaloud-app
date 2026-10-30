@@ -118,12 +118,34 @@ final class OwnedPositionEvent {
     required this.charPosition,
     required this.isPlaying,
     required this.ttsStatus,
+    this.isNaturalCompletion = false,
   });
 
   final PlaybackOwnerKey owner;
   final int charPosition;
   final bool isPlaying;
   final TtsStatus ttsStatus;
+
+  /// 全チャンクを読み切った自然終了（P5）。
+  final bool isNaturalCompletion;
+}
+
+/// [TransportOps.completeNaturallyUnlocked] が適用された結果（P5）。
+/// [target] は完了した playback の target（永続化は上位層が行う）。
+final class NaturalCompletionResult {
+  const NaturalCompletionResult({
+    required this.target,
+    required this.usageFlushSucceeded,
+    this.usageFlushErrorType,
+    this.resumeStateDiscarded = true,
+  });
+
+  final PlaybackTarget target;
+  final bool usageFlushSucceeded;
+  final String? usageFlushErrorType;
+
+  /// resume fence（C3）の適用に成功したか。失敗しても owner の clear は行われる。
+  final bool resumeStateDiscarded;
 }
 
 /// Transport が受け取ったすべての position event の観測（Observability 用）。
@@ -208,6 +230,19 @@ abstract interface class TransportOps {
     required PersistentTarget target,
     required PlaybackOwnerKey newOwner,
     required PlaybackUsageAccounting accounting,
+  });
+
+  /// 自然終了（P5）。[owner] が active かつ [epoch] が一致する場合のみ、
+  /// usage flush → resume fence → target capture → active clear を行う。
+  /// それ以外は null で完全 no-op（accounting / TTS / state に触れない）。
+  /// TTS の stop/pause は呼ばない（既に自然終了しているため）。ただし owner を
+  /// 恒久的に clear する以上、owner を retire する他の経路（C3）と同様に resume
+  /// state を fence する（`NotificationDisposition.clearIfNoLiveOwner`）。
+  /// これにより、終了後の media button / interruption 終了による `play()` が
+  /// owner なしで全文を再生し直すことはない。fence の失敗は clear を妨げない。
+  Future<NaturalCompletionResult?> completeNaturallyUnlocked({
+    required PlaybackOwnerKey owner,
+    required int epoch,
   });
   int get currentPosition;
   PlaybackOwnerKey? get activeOwner;
@@ -504,6 +539,50 @@ class SharedPlaybackTransport implements TransportOps {
   }
 
   @override
+  Future<NaturalCompletionResult?> completeNaturallyUnlocked({
+    required PlaybackOwnerKey owner,
+    required int epoch,
+  }) async {
+    final target = _activeRequest?.target;
+    if (_activeOwner != owner || _sessionEpoch != epoch || target == null) {
+      return null;
+    }
+    final flush = _flushUsage(owner);
+    final usage = flush is Future<UsageFlushResult> ? await flush : flush;
+    // owner を恒久 clear するため resume fence（C3）。失敗しても clear は行う。
+    bool discarded = true;
+    try {
+      await _resumeFence.discardResumeState(
+          notificationDisposition: NotificationDisposition.clearIfNoLiveOwner);
+    } catch (e) {
+      discarded = false;
+      unawaited(DebugLogger.instance.logEvent('error', {
+        'context': 'playback_resume_fence',
+        'errorType': e.runtimeType.toString(),
+      }));
+    }
+    // flush 中に owner / epoch が変わることはない（exclusive 区間内）が、
+    // 念のため clear 対象が自分であることを確認する。
+    if (_activeOwner == owner && _sessionEpoch == epoch) {
+      _clearActive();
+    }
+    unawaited(DebugLogger.instance.logEvent('playback_natural_completion', {
+      'owner': owner.toString(),
+      'epoch': epoch,
+      'persistent': target is PersistentTarget,
+      'usageFlushSucceeded': usage.succeeded,
+      'usageFlushErrorType': usage.errorType,
+      'resumeStateDiscarded': discarded,
+    }));
+    return NaturalCompletionResult(
+      target: target,
+      usageFlushSucceeded: usage.succeeded,
+      usageFlushErrorType: usage.errorType,
+      resumeStateDiscarded: discarded,
+    );
+  }
+
+  @override
   Future<ForceStopOutcome> forceStopForTeardownUnlocked({
     required PlaybackOwnerKey expectedOwner,
     required TeardownReason reason,
@@ -789,6 +868,7 @@ class SharedPlaybackTransport implements TransportOps {
         charPosition: data.charPosition,
         isPlaying: data.isPlaying,
         ttsStatus: data.ttsStatus,
+        isNaturalCompletion: data.isNaturalCompletion,
       ));
     }
   }

@@ -8,6 +8,10 @@ import 'save_playback_state_usecase.dart';
 /// 存在しないこと」であり、no-op の [TransientPersistencePolicy] はその補助。
 abstract interface class PlaybackPersistencePolicy {
   Future<PositionSaveResult> persistStopPosition({required int position});
+
+  /// 自然終了（P5）。Transient は no-op、Persistent は 100%/completed を保存。
+  /// 例外は投げない。
+  Future<PositionSaveResult> persistNaturalCompletion();
   Future<void> persistPosition({
     required int position,
     required double progressPct,
@@ -39,6 +43,10 @@ final class TransientPersistencePolicy implements PlaybackPersistencePolicy {
   @override
   Future<PositionSaveResult> persistStopPosition(
           {required int position}) async =>
+      const PositionSaveResult.notApplicable();
+
+  @override
+  Future<PositionSaveResult> persistNaturalCompletion() async =>
       const PositionSaveResult.notApplicable();
 
   @override
@@ -85,6 +93,17 @@ final class PersistentPersistencePolicy implements PlaybackPersistencePolicy {
         contentId: _target.contentId,
         position: position,
       );
+      return const PositionSaveResult(succeeded: true);
+    } catch (e) {
+      return PositionSaveResult(
+          succeeded: false, errorType: e.runtimeType.toString());
+    }
+  }
+
+  @override
+  Future<PositionSaveResult> persistNaturalCompletion() async {
+    try {
+      await _saveState.executeCompletion(contentId: _target.contentId);
       return const PositionSaveResult(succeeded: true);
     } catch (e) {
       return PositionSaveResult(

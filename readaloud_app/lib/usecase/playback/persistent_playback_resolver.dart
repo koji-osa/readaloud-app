@@ -29,11 +29,19 @@ class PersistentPlaybackResolver {
       content.copyWith(status: 'in_progress'),
     );
 
+    // W2-R-03 / Human Decision A: 保存位置が範囲外（本文長以上＝再生完了済み、
+    // または負値）なら 0 から再生する。範囲内の途中位置はそのまま再開する。
+    final savedPosition = state.position;
+    final startPosition =
+        (savedPosition < 0 || savedPosition >= content.body.length)
+            ? 0
+            : savedPosition;
+
     return PlaybackRequest(
       target: PersistentTarget.of(content),
       text: content.body,
       title: content.title,
-      startPosition: state.position,
+      startPosition: startPosition,
       voice: PlaybackVoiceParams(
         speed: state.speed,
         pitch: state.pitch,

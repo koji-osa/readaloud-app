@@ -46,6 +46,18 @@ class SavePlaybackStateUseCase {
     }
   }
 
+  /// 自然終了（P5）。位置=本文長 / 進捗100% を保存する（status は [execute] の
+  /// 既存規則で completed）。Content 欠損・空本文は fail-closed で何も書かない。
+  Future<void> executeCompletion({required String contentId}) async {
+    final content = await _contentRepo.getById(contentId);
+    if (content == null || content.body.isEmpty) return;
+    await execute(
+      contentId: contentId,
+      position: content.body.length,
+      progressPct: 100.0,
+    );
+  }
+
   /// 停止系（stop / pause / teardown / retire / adopt）の位置保存。
   ///
   /// 進捗率は「停止位置 ÷ 現在の Content.body.length」で計算する（RA-PROG-IMPL-A-01）。

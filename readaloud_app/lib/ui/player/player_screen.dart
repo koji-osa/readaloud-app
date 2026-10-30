@@ -113,6 +113,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// supersession時に自動的に消える（D18）。
   String? _progressBannerText;
 
+  /// P10: AppBar back でstop完了待ち中の再入防止。
+  bool _leaving = false;
+
   bool get _showObsidianButton =>
       PlayerScreen.showObsidianButtonFor(widget.content);
 
@@ -252,7 +255,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     });
 
     return Scaffold(
-      body: SafeArea(
+      body: AbsorbPointer(
+        // W2-R-05: 離脱(stop待機)中は入力を受けない。
+        absorbing: _leaving,
+        child: SafeArea(
         child: Column(
           children: [
             // ヘッダー
@@ -263,9 +269,30 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   IconButton(
                     icon:
                         const Icon(Icons.arrow_back, color: Color(0xFF8888AA)),
-                    onPressed: () {
-                      vm.stop(origin: _origin);
-                      Navigator.of(context).pop();
+                    onPressed: () async {
+                      // P10: stopの保存完了後にpopし、route完了時のreloadが
+                      // 保存後のDB値を読むようにする。二重タップは無視する。
+                      if (_leaving) return;
+                      setState(() => _leaving = true);
+                      final navigator = Navigator.of(context);
+                      final route = ModalRoute.of(context);
+                      try {
+                        await vm
+                            .stop(origin: _origin)
+                            .timeout(const Duration(seconds: 5));
+                      } on TimeoutException {
+                        // TTS等のハングでユーザーを閉じ込めない。stopは継続する。
+                      } catch (_) {
+                        // stop失敗でも従来どおり戻れるようにする。
+                      }
+                      // W2-R-01: System Backで先にこのrouteが閉じ始めていても
+                      // 別route(Home)をpopしない。自routeだけをidentity-safeに閉じる。
+                      if (!mounted || route == null) return;
+                      if (route.isCurrent) {
+                        navigator.pop();
+                      } else if (route.isActive) {
+                        navigator.removeRoute(route);
+                      }
                     },
                   ),
                   Expanded(
@@ -551,6 +578,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -821,10 +849,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         );
         if (token == null) return; // Aはすでにsupersededで、Bは生成しない
         // ホーム画面のコンテンツリストをバックグラウンドで更新（FIX-066）
-        ref.read(contentListViewModelProvider.notifier).loadContents();
+        // R-01: pushReplacementでAのrefは使えなくなるため、notifierを先に捕捉する。
+        final contentListVm = ref.read(contentListViewModelProvider.notifier);
+        contentListVm.loadContents();
         try {
-          unawaited(Navigator.pushReplacement(context, route)
-              .then((_) => tracker.clearIfCurrent(route)));
+          unawaited(Navigator.pushReplacement(context, route).then((_) {
+            tracker.clearIfCurrent(route);
+            // R-01: B終了後に一覧を再読込（P4/add_screen._startReadingと同契約）。
+            if (contentListVm.mounted) contentListVm.loadContents();
+          }));
         } catch (e) {
           tracker.abortRegistration(token);
           rethrow;
