@@ -513,7 +513,10 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         ),
         stage: 'fast_forward_complete',
       );
-      if (wasPlaying) await play(origin: origin);
+      // W2-R3-01: 終端到達は完了扱い。自動再生しない（seekToEnd と同じ）。
+      if (wasPlaying && newPosition < state.content!.body.length) {
+        await play(origin: origin);
+      }
     } catch (e) {
       _write(
         origin,
@@ -778,7 +781,8 @@ class PlayerViewModel extends StateNotifier<PlayerState> {
         (position / state.content!.body.length * 100).clamp(0.0, 100.0);
     await seekTo(origin: origin, progressPct: progressPct);
     // 再生中だった場合は指定位置から再生を再開
-    if (wasPlaying) {
+    // W2-R3-01: 終端到達(100%)は完了扱い。自動再生しない（seekToEnd と同じ）。
+    if (wasPlaying && progressPct < 100.0) {
       await play(origin: origin);
     }
   }
